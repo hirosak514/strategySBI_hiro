@@ -96,7 +96,7 @@ st.divider()
 # --- メイン画面: ポートフォリオ監視 ---
 st.header("📉 Real-time Portfolio Monitor")
 current_prices = get_live_prices(TICKERS)
-
+ 
 rows = []
 for name, info in st.session_state.portfolio.items():
     cur_price = current_prices.get(name)
