@@ -45,7 +45,8 @@ def get_live_prices(tickers_dict):
 def analyze_image(image):
     """Gemini APIを使用して画像からポジション情報を抽出"""
     
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
+    
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
     prompt = """
     あなたは証券アナリストです。添付されたスクリーンショットから以下の銘柄の情報を抽出し、
     必ず以下の純粋なJSON形式のみで回答してください。
