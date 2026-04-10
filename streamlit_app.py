@@ -1,10 +1,11 @@
 import streamlit as st
-from google import genai  # 新しい推奨パッケージを使用
+from google import genai  # 新SDKを使用
 from datetime import datetime
 import pandas as pd
 from PIL import Image
 
-# --- 1. アプリ設定 & API接続 ---
+# --- 1. アプリ設定 ---
+# 最初期の「センターレイアウト」を復元
 st.set_page_config(page_title="1% Investor Dashboard", layout="centered")
 
 # SecretsからAPIキーを取得
@@ -14,7 +15,7 @@ else:
     st.error("Secretsに 'GEMINI_API_KEY' が登録されていません。")
     st.stop()
 
-# --- 2. 統合済みポジションデータ ---
+# --- 2. 統合済みポジションデータ (画像から合算) ---
 USD_JPY_RATE = 158.45 
 
 positions = [
@@ -36,16 +37,19 @@ for p in positions:
 # --- 4. メイン表示 (初期のシンプルUI) ---
 st.title("🚀 1%の投資家：出口戦略ダッシュボード")
 
+# カウントダウン
 st.header("🗓 カウントダウン")
 days_left = (datetime(2026, 5, 29) - datetime.now()).days
 st.metric("5/29 出口ターゲットまで", f"あと {days_left} 日")
 
 st.divider()
 
+# 総合損益
 st.header("💰 総合損益状況")
 st.metric("総損益 (円計)", f"¥{total_profit_jpy:,.0f}", delta=f"{total_profit_jpy/10000:.1f}万円")
-st.write(f"（為替レート: ¥{USD_JPY_RATE}）")
+st.write(f"（ベース為替レート: 1ドル = ¥{USD_JPY_RATE}）")
 
+# ポジション詳細
 st.header("📊 統合ポジション詳細")
 df = pd.DataFrame(positions)
 df['損益'] = (df['price'] - df['cost']) * df['shares']
@@ -59,7 +63,7 @@ uploaded_file = st.file_uploader("チャート画像をアップロード", type
 
 if uploaded_file:
     img = Image.open(uploaded_file)
-    st.image(img, caption="解析対象", use_container_width=True)
+    st.image(img, caption="解析対象の画像", width=600)
 
 user_question = st.text_input("AIへの質問を入力してください")
 
@@ -73,10 +77,10 @@ if st.button("AIコンシェルジュに相談する"):
         - ユーザーの質問: {user_question if user_question else "現状を分析してください"}
         """
         
-        # 新しいSDKでの生成方法
+        # 429エラーが出た場合は少し待つ必要があるため、エラーハンドリングを強化
         if uploaded_file:
             response = client.models.generate_content(
-                model='gemini-2.0-flash', # 最新の2.0-flashを使用
+                model='gemini-2.0-flash',
                 contents=[prompt, img]
             )
         else:
@@ -84,9 +88,10 @@ if st.button("AIコンシェルジュに相談する"):
                 model='gemini-2.0-flash',
                 contents=prompt
             )
-            
         st.info(response.text)
         
     except Exception as e:
-        st.error("最新のAIモデルへの接続に失敗しました。")
-        st.write(f"エラー詳細: {e}")
+        if "429" in str(e):
+            st.warning("現在、Google側の無料枠制限（APIレート制限）にかかっています。数分待ってから再度ボタンを押してください。")
+        else:
+            st.error(f"エラーが発生しました: {e}")
