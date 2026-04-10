@@ -8,79 +8,81 @@ import google.generativeai as genai
 # --- 1. アプリ設定 ---
 st.set_page_config(page_title="1% Investor Dashboard", layout="centered")
 
-# --- 2. 確定済みポジションデータ ---
-POSITIONS = [
-    {"ticker": "MU",   "name": "マイクロン",     "shares": 71,   "cost": 374.88, "currency": "USD"},
-    {"ticker": "VRT",  "name": "バーティブ",     "shares": 70,   "cost": 264.44, "currency": "USD"},
-    {"ticker": "NEE",  "name": "ネクステラ",     "shares": 105,  "cost": 93.75,  "currency": "USD"},
-    {"ticker": "7013.T", "name": "IHI",        "shares": 1400, "cost": 3425.4, "currency": "JPY"},
+# --- 2. ポジションデータ (2026/04/10 精査) ---
+# 米国株
+US_POSITIONS = [
+    {"ticker": "MU",   "name": "マイクロン",     "shares": 71,   "cost": 374.88},
+    {"ticker": "VRT",  "name": "バーティブ",     "shares": 70,   "cost": 264.44},
+    {"ticker": "NEE",  "name": "ネクステラ",     "shares": 105,  "cost": 93.75},
 ]
 
-# --- 3. 市場データ取得 (yfinance: ここはAPI制限なし) ---
+# 日本株 IHI (現物買い 1,400株 / 信用売り 300株)
+IHI_LONG_SHARES = 1400
+IHI_LONG_COST = 3425.4   # 平均取得単価
+IHI_SHORT_SHARES = 300
+IHI_SHORT_COST = 3350.0  # 仮の約定単価（画像に基づき調整してください）
+
+# --- 3. 市場データの取得 (yfinance) ---
 @st.cache_data(ttl=3600)
 def get_market_data():
-    try:
-        forex = yf.Ticker("JPY=X").history(period="1d")
-        current_usdjpy = forex['Close'].iloc[-1]
-        results = []
-        for p in POSITIONS:
-            ticker_obj = yf.Ticker(p["ticker"])
-            current_price = ticker_obj.history(period="1d")['Close'].iloc[-1]
-            diff = current_price - p["cost"]
-            profit_jpy = (diff * p["shares"] * current_usdjpy) if p["currency"] == "USD" else (diff * p["shares"])
-            results.append({"銘柄": p["name"], "数量": p["shares"], "取得単価": f"{p['cost']:,.2f}", "現在値": f"{current_price:,.2f}", "損益(円)": profit_jpy})
-        return results, current_usdjpy
-    except:
-        # 万が一yfinanceが失敗した際のフォールバック
-        return [], 159.20
+    forex = yf.Ticker("JPY=X").history(period="1d")
+    rate = forex['Close'].iloc[-1]
+    
+    # 米国株計算
+    us_results = []
+    for p in US_POSITIONS:
+        price = yf.Ticker(p["ticker"]).history(period="1d")['Close'].iloc[-1]
+        profit_jpy = (price - p["cost"]) * p["shares"] * rate
+        us_results.append({"銘柄": p["name"], "数量": p["shares"], "区分": "現物", "損益(円)": profit_jpy, "現在値": price})
 
-data_list, rate_now = get_market_data()
+    # IHI計算
+    ihi_price = yf.Ticker("7013.T").history(period="1d")['Close'].iloc[-1]
+    # 現物損益: (現在値 - 取得単価) * 数量
+    ihi_long_profit = (ihi_price - IHI_LONG_COST) * IHI_LONG_SHARES
+    # 信用売り損益: (売単価 - 現在値) * 数量 ※価格下落でプラス
+    ihi_short_profit = (IHI_SHORT_COST - ihi_price) * IHI_SHORT_SHARES
+    
+    return us_results, ihi_long_profit, ihi_short_profit, ihi_price, rate
 
-# --- 4. メイン表示 (最初期のUIレイアウト) ---
+with st.spinner('データを取得中...'):
+    us_data, ihi_l_profit, ihi_s_profit, ihi_now, current_rate = get_market_data()
+
+# --- 4. メイン表示 ---
 st.title("🚀 1%の投資家：出口戦略ボード")
 days_left = (datetime(2026, 5, 29) - datetime.now()).days
 st.metric("5/29 出口ターゲットまで", f"あと {days_left} 日")
 
 st.divider()
 
-if data_list:
-    total_profit = sum(item["損益(円)"] for item in data_list)
-    st.header("💰 総合損益状況")
-    c1, c2 = st.columns(2)
-    c1.metric("総損益 (日本円計)", f"¥{total_profit:,.0f}", delta=f"{total_profit/10000:.1f}万円")
-    c2.metric("現在のドル円", f"¥{rate_now:.2f}")
-    st.divider()
-    st.table(pd.DataFrame(data_list))
-else:
-    st.error("現在、株価データの取得に失敗しています。時間を置いてリロードしてください。")
+# 総合計の計算
+total_profit = sum(d["損益(円)"] for d in us_data) + ihi_l_profit + ihi_s_profit
+st.header("💰 総合損益状況")
+c1, c2 = st.columns(2)
+c1.metric("総損益 (日本円計)", f"¥{total_profit:,.0f}", delta=f"実質保有 {IHI_LONG_SHARES - IHI_SHORT_SHARES}株")
+c2.metric("現在のドル円", f"¥{current_rate:.2f}")
 
-# --- 5. AI診断セクション ---
+st.divider()
+
+# --- 5. IHI詳細 (ヘッジ状況の可視化) ---
+st.subheader("🏗️ IHI (7013) 戦略状況")
+i1, i2, i3 = st.columns(3)
+i1.write(f"**現物買い (1,400株)**\n\n¥{ihi_l_profit:,.0f}")
+i2.write(f"**信用売り (300株)**\n\n¥{ihi_s_profit:,.0f}")
+i3.write(f"**IHIトータル損益**\n\n**¥{ihi_l_profit + ihi_s_profit:,.0f}**")
+st.caption(f"現在のIHI株価: ¥{ihi_now:,.1f}（信用売りが下落分を ¥{abs(ihi_s_profit):,.0f} カバー中）")
+
+st.divider()
+
+# --- 6. AI診断セクション ---
 st.header("📸 AIチャート・画像診断")
-uploaded_file = st.file_uploader("診断したい画像をアップロード", type=["png", "jpg", "jpeg"])
-
-if uploaded_file:
-    img = Image.open(uploaded_file)
-    st.image(img, caption="診断対象の画像", use_container_width=True)
-
-if uploaded_file and st.button("AIコンシェルジュに診断を依頼する"):
-    with st.spinner('最新のGeminiモデルで分析中...'):
+uploaded_file = st.file_uploader("診断画像をアップロード", type=["png", "jpg", "jpeg"])
+if uploaded_file and st.button("AIコンシェルジュに診断を依頼"):
+    with st.spinner('分析中...'):
         try:
-            if "GEMINI_API_KEY" in st.secrets:
-                genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-            else:
-                st.error("Secretsに APIキー が設定されていません。")
-                st.stop()
-            
-            # Gemini 2.0 Flash を優先使用
+            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
             model = genai.GenerativeModel('gemini-2.0-flash')
-            
-            prompt = f"あなたは「1%の投資家」の専属コンシェルジュです。現在の損益{total_profit:,.0f}円、出口まで残り{days_left}日という状況を踏まえ、この画像を分析してください。"
-            
-            response = model.generate_content([prompt, img])
+            prompt = f"総損益 {total_profit:,.0f}円。IHIは現物1400株と信用売300株の両建て。出口まで{days_left}日。画像を分析して。"
+            response = model.generate_content([prompt, Image.open(uploaded_file)])
             st.info(response.text)
-            
         except Exception as e:
-            if "429" in str(e):
-                st.warning("現在、AIの利用制限（429エラー）がかかっています。数分〜1時間ほど待ってから再度「診断を依頼する」ボタンを押してください。※上の損益表はそのまま利用可能です。")
-            else:
-                st.error(f"診断中にエラーが発生しました。時間を置いてお試しください。")
+            st.warning("AIは現在制限中です。数分お待ちください。")
