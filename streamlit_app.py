@@ -89,7 +89,7 @@ with col_b:
 if analyze_button:
     try:
         # 最新のGemini 3.1 Flashを使用
-        model = genai.GenerativeModel('gemini-3.1-flash-preview')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         # 解析用のプロンプト作成
         prompt = f"""
