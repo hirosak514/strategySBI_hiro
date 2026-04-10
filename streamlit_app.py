@@ -9,7 +9,7 @@ st.set_page_config(page_title="1% Investor Dashboard", layout="wide")
 
 # APIキーの設定
 # StreamlitのSecretsを使う場合は st.secrets["GEMINI_API_KEY"] に書き換えてください
-API_KEY = "YOUR_API_KEY_HERE" 
+API_KEY = st.secrets["GEMINI_API_KEY"] 
 genai.configure(api_key=API_KEY)
 
 # --- 2. データ定義 & レート設定 ---
