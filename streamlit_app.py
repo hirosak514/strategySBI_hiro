@@ -11,6 +11,7 @@ import os
 
 # --- 0. データの保存・読み込み (リロード対策) ---
 DB_FILE = "portfolio.json"
+EVENT_FILE = "events.json"
 
 def load_data():
     if os.path.exists(DB_FILE):
@@ -19,7 +20,6 @@ def load_data():
                 return json.load(f)
         except:
             pass
-    # 初期値（解析前・精査済みデータ）
     return {
         "MU": {"shares": 71, "cost": 374.88, "currency": "USD"},
         "VRT": {"shares": 70, "cost": 264.44, "currency": "USD"},
@@ -31,6 +31,19 @@ def load_data():
 def save_data(data):
     with open(DB_FILE, "w") as f:
         json.dump(data, f)
+
+def load_events():
+    if os.path.exists(EVENT_FILE):
+        try:
+            with open(EVENT_FILE, "r") as f:
+                return json.load(f)
+        except:
+            pass
+    return []
+
+def save_events(events):
+    with open(EVENT_FILE, "w") as f:
+        json.dump(events, f)
 
 # --- 1. セキュリティ設定 (Gemini API) ---
 try:
@@ -47,6 +60,8 @@ TICKERS = {"MU": "MU", "VRT": "VRT", "NEE": "NEE", "IHI": "7013.T"}
 # --- 3. セッション状態の初期化 ---
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = load_data()
+if 'events' not in st.session_state:
+    st.session_state.events = load_events()
 
 # --- 4. 関数定義 ---
 def get_live_prices(tickers_dict):
@@ -58,11 +73,10 @@ def get_live_prices(tickers_dict):
             prices[name] = hist['Close'].iloc[-1] if not hist.empty else None
         except:
             prices[name] = None
-    # ドル円レートも取得
     try:
         prices["USDJPY"] = yf.Ticker("JPY=X").history(period="1d")['Close'].iloc[-1]
     except:
-        prices["USDJPY"] = 159.0 # フォールバック
+        prices["USDJPY"] = 159.0
     return prices
 
 def analyze_image(image):
@@ -83,7 +97,7 @@ st.set_page_config(page_title="MSCI Exit Strategy Dashboard", layout="wide")
 
 st.title("🚀 Strategist Dashboard: AI Scanner & Exit Path")
 
-# --- サイドバー: 画像アップロード ---
+# --- サイドバー: 画像アップロード & イベント管理 ---
 st.sidebar.header("📸 Position Update")
 uploaded_file = st.sidebar.file_uploader("証券口座のスクショをアップロード", type=["png", "jpg", "jpeg"])
 
@@ -95,22 +109,66 @@ if uploaded_file:
             for ticker, vals in new_data.items():
                 if ticker in st.session_state.portfolio:
                     st.session_state.portfolio[ticker].update(vals)
-            # 解析結果を永続化
             save_data(st.session_state.portfolio)
             st.sidebar.success("解析完了！データを保存しました。")
             st.rerun()
         except Exception as e:
             st.sidebar.error(f"解析エラー: {e}")
 
+st.sidebar.divider()
+st.sidebar.header("📅 Event Manager")
+
+# イベント登録フォーム
+new_event_name = st.sidebar.text_input("イベント名を入力")
+new_event_date = st.sidebar.date_input("日付を選択", value=datetime.now())
+
+if st.sidebar.button("登録"):
+    if new_event_name:
+        # 新しいイベントを追加 (IDはリストの長さ+1)
+        event_id = len(st.session_state.events) + 1
+        new_event = {
+            "id": event_id,
+            "name": new_event_name,
+            "date": new_event_date.strftime("%Y-%m-%d")
+        }
+        st.session_state.events.append(new_event)
+        save_events(st.session_state.events)
+        st.sidebar.success(f"No.{event_id} を登録しました")
+        st.rerun()
+
+st.sidebar.divider()
+
+# イベント削除フォーム
+del_id = st.sidebar.number_input("削除するイベントNo", min_value=1, step=1)
+if st.sidebar.button("削除"):
+    # 指定されたIDのイベントを除外
+    st.session_state.events = [e for e in st.session_state.events if e['id'] != del_id]
+    # IDを振り直す
+    for i, e in enumerate(st.session_state.events):
+        e['id'] = i + 1
+    save_events(st.session_state.events)
+    st.sidebar.warning(f"No.{del_id} を削除しました")
+    st.rerun()
+
 # --- メイン画面: カウントダウン ---
-col1, col2 = st.columns(2)
+col_fixed1, col_fixed2 = st.columns(2)
 days_to_ann = (DATE_ANNOUNCEMENT - datetime.now()).days
 days_to_exit = (DATE_EXIT - datetime.now()).days
 
-with col1:
+with col_fixed1:
     st.metric("MSCI発表 (5/12) まで", f"{days_to_ann} 日")
-with col2:
+with col_fixed2:
     st.metric("出口戦略 (5/29) まで", f"{days_to_exit} 日", delta_color="inverse")
+
+# --- 追加されたカスタムイベントの表示 ---
+if st.session_state.events:
+    st.write("📌 **追加イベント**")
+    cols = st.columns(len(st.session_state.events))
+    for i, event in enumerate(st.session_state.events):
+        e_date = datetime.strptime(event['date'], "%Y-%m-%d")
+        e_days = (e_date - datetime.now()).days
+        with cols[i]:
+            st.metric(f"No.{event['id']}: {event['name']}", f"{e_days} 日", help=f"設定日: {event['date']}")
 
 st.divider()
 
@@ -122,7 +180,6 @@ rate = current_prices.get("USDJPY", 159.0)
 rows = []
 total_profit = 0
 
-# 米国株の損益計算
 for name in ["MU", "VRT", "NEE"]:
     info = st.session_state.portfolio[name]
     cur_price = current_prices.get(name)
@@ -135,26 +192,16 @@ for name in ["MU", "VRT", "NEE"]:
             "損益(円)": f"¥{profit:,.0f}"
         })
 
-# IHI(両建て)の損益計算
 ihi_cur = current_prices.get("IHI")
 if ihi_cur:
     l_info = st.session_state.portfolio["IHI_LONG"]
     s_info = st.session_state.portfolio["IHI_SHORT"]
-    
     l_profit = (ihi_cur - l_info['cost']) * l_info['shares']
     s_profit = (s_info['cost'] - ihi_cur) * s_info['shares']
     total_profit += (l_profit + s_profit)
-    
-    rows.append({
-        "銘柄": "IHI", "数量": l_info['shares'], "区分": "現物(LONG)",
-        "取得単価": f"¥{l_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{l_profit:,.0f}"
-    })
-    rows.append({
-        "銘柄": "IHI", "数量": s_info['shares'], "区分": "信用(SHORT)",
-        "取得単価": f"¥{s_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{s_profit:,.0f}"
-    })
+    rows.append({"銘柄": "IHI", "数量": l_info['shares'], "区分": "現物(LONG)", "取得単価": f"¥{l_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{l_profit:,.0f}"})
+    rows.append({"銘柄": "IHI", "数量": s_info['shares'], "区分": "信用(SHORT)", "取得単価": f"¥{s_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{s_profit:,.0f}"})
 
-# 総損益サマリー
 st.metric("総計損益 (JPY)", f"¥{total_profit:,.0f}", delta=f"USD/JPY: {rate:.2f}")
 
 if rows:
@@ -162,7 +209,6 @@ if rows:
 else:
     st.write("株価データ取得中...")
 
-# --- 戦略メモ ---
 st.divider()
 st.subheader("📋 1% Investor's Reminder")
 st.info(f"""
