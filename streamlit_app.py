@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -13,75 +12,51 @@ import os
 DB_FILE = "portfolio.json"
 EVENT_FILE = "events.json"
 REMINDER_FILE = "reminder.json"
+CONFIG_FILE = "config.json"
 
-def load_data():
-    if os.path.exists(DB_FILE):
+def load_json(file_path, default_value):
+    if os.path.exists(file_path):
         try:
-            with open(DB_FILE, "r") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except:
             pass
-    return {
-        "MU": {"shares": 71, "cost": 374.88, "currency": "USD"},
-        "VRT": {"shares": 70, "cost": 264.44, "currency": "USD"},
-        "NEE": {"shares": 105, "cost": 93.75, "currency": "USD"},
-        "IHI_LONG": {"shares": 1400, "cost": 3425.4, "currency": "JPY"},
-        "IHI_SHORT": {"shares": 300, "cost": 3350.0, "currency": "JPY"}
-    }
+    return default_value
 
-def save_data(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f)
+def save_json(file_path, data):
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
-def load_events():
-    if os.path.exists(EVENT_FILE):
-        try:
-            with open(EVENT_FILE, "r") as f:
-                return json.load(f)
-        except:
-            pass
-    return []
+# --- 1. セッション状態の初期化 ---
+if 'portfolio' not in st.session_state:
+    st.session_state.portfolio = load_json(DB_FILE, {
+        "MU": {"shares": 0, "cost": 0.0, "currency": "USD"},
+        "VRT": {"shares": 0, "cost": 0.0, "currency": "USD"},
+        "NEE": {"shares": 0, "cost": 0.0, "currency": "USD"},
+        "IHI_LONG": {"shares": 0, "cost": 0.0, "currency": "JPY"},
+        "IHI_SHORT": {"shares": 0, "cost": 0.0, "currency": "JPY"}
+    })
 
-def save_events(events):
-    with open(EVENT_FILE, "w") as f:
-        json.dump(events, f)
+if 'events' not in st.session_state:
+    st.session_state.events = load_json(EVENT_FILE, [])
 
-def load_reminder():
-    if os.path.exists(REMINDER_FILE):
-        try:
-            with open(REMINDER_FILE, "r") as f:
-                return json.load(f)
-        except:
-            pass
-    return """- **Exit Target:** 2026/05/29 終値リバランスの需要を狙い撃つ。
-- **Focus:** MU, VRT, IHI の3銘柄に集中。IHIは信用売りを活用したヘッジを継続。
-- **Cash Management:** 余力 $10,000 を適切なタイミングで投入。"""
+if 'reminder_text' not in st.session_state:
+    st.session_state.reminder_text = load_json(REMINDER_FILE, "- ターゲット日程を入力してください\n- 戦略をメモしてください")
 
-def save_reminder(text):
-    with open(REMINDER_FILE, "w") as f:
-        json.dump(text, f)
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = load_json(CONFIG_FILE, {"gemini_key": ""})["gemini_key"]
 
-# --- 1. セキュリティ設定 (Gemini API) ---
-try:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-except Exception:
-    st.error("Secretsに 'GEMINI_API_KEY' が設定されていません。")
-    st.stop()
+if 'edit_mode' not in st.session_state:
+    st.session_state.edit_mode = False
 
-# --- 2. 定数・重要日程の設定 ---
+# --- 2. API設定 ---
+if st.session_state.api_key:
+    genai.configure(api_key=st.session_state.api_key)
+
+# --- 3. 定数・重要日程 ---
 DATE_ANNOUNCEMENT = datetime(2026, 5, 12)
 DATE_EXIT = datetime(2026, 5, 29)
 TICKERS = {"MU": "MU", "VRT": "VRT", "NEE": "NEE", "IHI": "7013.T"}
-
-# --- 3. セッション状態の初期化 ---
-if 'portfolio' not in st.session_state:
-    st.session_state.portfolio = load_data()
-if 'events' not in st.session_state:
-    st.session_state.events = load_events()
-if 'reminder_text' not in st.session_state:
-    st.session_state.reminder_text = load_reminder()
-if 'edit_mode' not in st.session_state:
-    st.session_state.edit_mode = False
 
 # --- 4. 関数定義 ---
 def get_live_prices(tickers_dict):
@@ -96,121 +71,113 @@ def get_live_prices(tickers_dict):
     try:
         prices["USDJPY"] = yf.Ticker("JPY=X").history(period="1d")['Close'].iloc[-1]
     except:
-        prices["USDJPY"] = 159.0
+        prices["USDJPY"] = 159.2
     return prices
 
-def analyze_image(image):
+def analyze_multiple_images(uploaded_files):
+    if not st.session_state.api_key:
+        raise ValueError("APIキーが設定されていません。")
     model = genai.GenerativeModel('gemini-2.0-flash')
-    prompt = """
-    あなたは証券アナリストです。添付されたスクリーンショットからMU, VRT, NEE, IHIの情報を抽出し、
-    必ず以下の純粋なJSON形式のみで回答してください。
-    IHIについては、現物(IHI_LONG)と信用売り(IHI_SHORT)を分けて抽出してください。
-    出力例:
-    {"MU": {"shares": 71, "cost": 374.88}, "IHI_LONG": {"shares": 1400, "cost": 3425.4}, "IHI_SHORT": {"shares": 300, "cost": 3350.0}}
-    """
-    response = model.generate_content([prompt, image])
+    prompt = """提供されたすべての証券画面からMU, VRT, NEE, IHI(LONG/SHORT)の合計ポジションを抽出しJSONで返してください。"""
+    images = [Image.open(f) for f in uploaded_files]
+    response = model.generate_content([prompt] + images)
     json_str = re.search(r'\{.*\}', response.text, re.DOTALL).group()
     return json.loads(json_str)
 
-# --- 5. Streamlit UI 構築 ---
+# --- 5. UI構築 ---
 st.set_page_config(page_title="MSCI Exit Strategy Dashboard", layout="wide")
 
-st.title("🚀 Strategist Dashboard: AI Scanner & Exit Path")
+# サイドバー: APIキー設定
+st.sidebar.header("🔑 System Settings")
+input_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
+if st.sidebar.button("APIキーを保存"):
+    st.session_state.api_key = input_key
+    save_json(CONFIG_FILE, {"gemini_key": input_key})
+    st.rerun()
 
-# --- サイドバー: 画像アップロード & イベント管理 ---
-st.sidebar.header("📸 Position Update")
-uploaded_file = st.sidebar.file_uploader("証券口座のスクショをアップロード", type=["png", "jpg", "jpeg"])
+st.sidebar.divider()
 
-if uploaded_file:
-    if st.sidebar.button("AIでポジションを更新"):
+# サイドバー: 画像アップロード
+st.sidebar.header("📸 Multi-Position Update")
+uploaded_files = st.sidebar.file_uploader("スクショをドラッグ＆ドロップ (複数可)", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+
+if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
+    with st.sidebar.spinner("解析中..."):
         try:
-            img = Image.open(uploaded_file)
-            new_data = analyze_image(img)
-            for ticker, vals in new_data.items():
+            aggregated_data = analyze_multiple_images(uploaded_files)
+            for ticker, vals in aggregated_data.items():
                 if ticker in st.session_state.portfolio:
                     st.session_state.portfolio[ticker].update(vals)
-            save_data(st.session_state.portfolio)
-            st.sidebar.success("解析完了！データを保存しました。")
+            save_json(DB_FILE, st.session_state.portfolio)
             st.rerun()
         except Exception as e:
             st.sidebar.error(f"解析エラー: {e}")
 
+# サイドバー: 📅 Event Manager
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
-
 new_event_name = st.sidebar.text_input("イベント名を入力")
 new_event_date = st.sidebar.date_input("日付を選択", value=datetime.now())
-
 if st.sidebar.button("登録"):
     if new_event_name:
         event_id = len(st.session_state.events) + 1
-        new_event = {"id": event_id, "name": new_event_name, "date": new_event_date.strftime("%Y-%m-%d")}
-        st.session_state.events.append(new_event)
-        save_events(st.session_state.events)
+        st.session_state.events.append({"id": event_id, "name": new_event_name, "date": new_event_date.strftime("%Y-%m-%d")})
+        save_json(EVENT_FILE, st.session_state.events)
         st.rerun()
 
-st.sidebar.divider()
 del_id = st.sidebar.number_input("削除するイベントNo", min_value=1, step=1)
 if st.sidebar.button("削除"):
     st.session_state.events = [e for e in st.session_state.events if e['id'] != del_id]
-    for i, e in enumerate(st.session_state.events):
-        e['id'] = i + 1
-    save_events(st.session_state.events)
+    for i, e in enumerate(st.session_state.events): e['id'] = i + 1
+    save_json(EVENT_FILE, st.session_state.events)
     st.rerun()
 
-# --- IR編集機能の追加 ---
+# サイドバー: 📝 Reminder Editor
 st.sidebar.divider()
 st.sidebar.header("📝 Reminder Editor")
 col_ir1, col_ir2 = st.sidebar.columns(2)
 if col_ir1.button("IR編集"):
     st.session_state.edit_mode = True
     st.rerun()
-
 if col_ir2.button("登録", key="save_ir"):
-    save_reminder(st.session_state.reminder_text)
+    save_json(REMINDER_FILE, st.session_state.reminder_text)
     st.session_state.edit_mode = False
-    st.sidebar.success("Reminderを更新しました")
     st.rerun()
-
 if st.session_state.edit_mode:
     st.session_state.reminder_text = st.sidebar.text_area("内容を編集", value=st.session_state.reminder_text, height=200)
 
-# --- メイン画面: カウントダウン ---
+# --- メイン画面表示 ---
+st.title("🚀 Strategist Dashboard: AI Scanner & Exit Path")
+
 col_fixed1, col_fixed2 = st.columns(2)
 days_to_ann = (DATE_ANNOUNCEMENT - datetime.now()).days
 days_to_exit = (DATE_EXIT - datetime.now()).days
-
-with col_fixed1:
-    st.metric("MSCI発表 (5/12) まで", f"{days_to_ann} 日")
-with col_fixed2:
-    st.metric("出口戦略 (5/29) まで", f"{days_to_exit} 日", delta_color="inverse")
+with col_fixed1: st.metric("MSCI発表まで", f"{days_to_ann} 日")
+with col_fixed2: st.metric("出口戦略まで", f"{days_to_exit} 日", delta_color="inverse")
 
 if st.session_state.events:
     st.write("📌 **追加イベント**")
     cols = st.columns(len(st.session_state.events))
     for i, event in enumerate(st.session_state.events):
         e_date = datetime.strptime(event['date'], "%Y-%m-%d")
-        e_days = (e_date - datetime.now()).days
-        with cols[i]:
-            st.metric(f"No.{event['id']}: {event['name']}", f"{e_days} 日")
+        with cols[i]: st.metric(f"No.{event['id']}: {event['name']}", f"{(e_date - datetime.now()).days} 日")
 
 st.divider()
 
-# --- メイン画面: ポートフォリオ監視 ---
+# --- ポートフォリオ監視セクション ---
 st.header("📉 Real-time Portfolio Monitor")
 current_prices = get_live_prices(TICKERS)
-rate = current_prices.get("USDJPY", 159.0)
+rate = current_prices.get("USDJPY", 159.2)
  
 rows = []
 total_profit = 0
-
 for name in ["MU", "VRT", "NEE"]:
     info = st.session_state.portfolio[name]
-    cur_price = current_prices.get(name)
-    if cur_price:
-        profit = (cur_price - info['cost']) * info['shares'] * rate
+    cur = current_prices.get(name)
+    if cur:
+        profit = (cur - info['cost']) * info['shares'] * rate
         total_profit += profit
-        rows.append({"銘柄": name, "数量": info['shares'], "区分": "現物", "取得単価": f"${info['cost']:,}", "現在値": f"${cur_price:,.2f}", "損益(円)": f"¥{profit:,.0f}"})
+        rows.append({"銘柄": name, "数量": info['shares'], "区分": "現物", "取得単価": f"${info['cost']:,}", "現在値": f"${cur:,.2f}", "損益(円)": f"¥{profit:,.0f}"})
 
 ihi_cur = current_prices.get("IHI")
 if ihi_cur:
@@ -222,16 +189,18 @@ if ihi_cur:
     rows.append({"銘柄": "IHI", "数量": l_info['shares'], "区分": "現物(LONG)", "取得単価": f"¥{l_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{l_profit:,.0f}"})
     rows.append({"銘柄": "IHI", "数量": s_info['shares'], "区分": "信用(SHORT)", "取得単価": f"¥{s_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{s_profit:,.0f}"})
 
-st.metric("総計損益 (JPY)", f"¥{total_profit:,.0f}", delta=f"USD/JPY: {rate:.2f}")
+# --- 改修ポイント: メトリクスとボタンを横並びに配置 ---
+# カラム比率 [3, 1, 6] で左側にメトリクス、そのすぐ右に更新ボタンを置く
+m_col1, m_col2, m_col3 = st.columns([3, 1, 6])
+with m_col1:
+    st.metric("総計損益 (JPY)", f"¥{total_profit:,.0f}", delta=f"USD/JPY: {rate:.2f}")
+with m_col2:
+    st.write("##") # 位置調整用の余白
+    if st.button('更新'):
+        st.rerun()
 
-if rows:
-    st.table(pd.DataFrame(rows))
-else:
-    st.write("株価データ取得中...")
+if rows: st.table(pd.DataFrame(rows))
 
 st.divider()
 st.subheader("📋 1% Investor's Reminder")
 st.info(st.session_state.reminder_text)
-
-if st.button('画面を更新'):
-    st.rerun()
