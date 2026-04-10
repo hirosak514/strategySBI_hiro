@@ -80,7 +80,7 @@ def analyze_multiple_images(uploaded_files):
         raise ValueError("APIキーが設定されていません。")
     
     
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
     
     prompt = """提供されたすべての証券画面からMU, VRT, NEE, IHI(LONG/SHORT)の合計ポジションを抽出しJSONで返してください。"""
     images = [Image.open(f) for f in uploaded_files]
