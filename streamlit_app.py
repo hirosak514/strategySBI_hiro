@@ -30,11 +30,12 @@ def save_json(file_path, data):
 # --- 1. セッション状態の初期化 ---
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = load_json(DB_FILE, {
-        "MU": {"shares": 0, "cost": 0.0, "currency": "USD"},
-        "VRT": {"shares": 0, "cost": 0.0, "currency": "USD"},
-        "NEE": {"shares": 0, "cost": 0.0, "currency": "USD"},
-        "IHI_LONG": {"shares": 0, "cost": 0.0, "currency": "JPY"},
-        "IHI_SHORT": {"shares": 0, "cost": 0.0, "currency": "JPY"}
+        "MU": {"shares": 71, "cost": 374.88, "currency": "USD"},
+        "VRT": {"shares": 70, "cost": 264.44, "currency": "USD"},
+        "NEE": {"shares": 105, "cost": 93.75, "currency": "USD"},
+        "IHI_LONG": {"shares": 1400, "cost": 3425.4, "currency": "JPY"},
+        "IHI_SHORT": {"shares": 300, "cost": 3350.0, "currency": "JPY"}
+
     })
 
 if 'events' not in st.session_state:
