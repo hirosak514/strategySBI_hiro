@@ -1,131 +1,97 @@
 import streamlit as st
-import yfinance as yf
-import pandas as pd
-from datetime import datetime
 import google.generativeai as genai
-from PIL import Image
-import json
-import re
+from datetime import datetime
+import pandas as pd
 
-# --- 1. セキュリティ設定 (Gemini API) ---
-try:
-    # Streamlit CloudのSecretsからAPIキーを取得
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-except Exception:
-    st.error("Secretsに 'GEMINI_API_KEY' が設定されていません。管理画面から設定してください。")
-    st.stop()
+# --- 1. アプリの設定 ---
+st.set_page_config(page_title="1% Investor Dashboard", layout="wide")
 
-# --- 2. 定数・重要日程の設定 ---
-DATE_ANNOUNCEMENT = datetime(2026, 5, 12)
-DATE_EXIT = datetime(2026, 5, 29)
-TICKERS = {"MU": "MU", "VRT": "VRT", "IHI": "7013.T"}
+# APIキーの設定（StreamlitのSecretsに設定することを推奨）
+# genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+genai.configure(api_key="YOUR_API_KEY_HERE") # テスト用。本来はSecretsを使用
 
-# --- 3. セッション状態の初期化 (ポジションデータの保持) ---
-if 'portfolio' not in st.session_state:
-    # 初期値（解析前）
-    st.session_state.portfolio = {
-        "MU": {"shares": 27, "cost": 364.78, "currency": "USD"},
-        "VRT": {"shares": 32, "cost": 257.77, "currency": "USD"},
-        "IHI": {"shares": 300, "cost": 3492.0, "currency": "JPY"}
-    }
+# --- 2. データ定義 & レート設定 ---
+# 最新のドル円レート（2026/04/10 時点。API連携がない場合はここを手動更新）
+USD_JPY_RATE = 158.45 
 
-# --- 4. 関数定義 ---
-def get_live_prices(tickers_dict):
-    """Yahoo Financeから最新株価を取得"""
-    prices = {}
-    for name, symbol in tickers_dict.items():
-        try:
-            stock = yf.Ticker(symbol)
-            hist = stock.history(period="1d")
-            prices[name] = hist['Close'].iloc[-1] if not hist.empty else None
-        except:
-            prices[name] = None
-    return prices
+# 保有ポジションデータ
+positions = [
+    {"ticker": "MU", "shares": 43, "price": 421.51, "cost": 368.19, "currency": "USD"},
+    {"ticker": "VRT", "shares": 32, "price": 287.64, "cost": 257.77, "currency": "USD"},
+    {"ticker": "IHI", "shares": 300, "price": 3391.0, "cost": 3503.7, "currency": "JPY"},
+]
 
-def analyze_image(image):
-    """Gemini APIを使用して画像からポジション情報を抽出"""
+# 重要イベント
+events = [
+    {"name": "VRT 決算発表", "date": datetime(2026, 4, 22)},
+    {"name": "MSCI 採用発表", "date": datetime(2026, 5, 12)},
+    {"name": "出口戦略 ターゲット", "date": datetime(2026, 5, 29)},
+]
+
+# --- 3. 計算ロジック ---
+total_profit_usd = 0.0
+total_profit_jpy = 0.0
+
+for p in positions:
+    diff = p["price"] - p["cost"]
+    profit_base = diff * p["shares"]
     
-    
-    
-    model = genai.GenerativeModel('gemini-3-flash-preview')
-    prompt = """
-    あなたは証券アナリストです。添付されたスクリーンショットから以下の銘柄の情報を抽出し、
-    必ず以下の純粋なJSON形式のみで回答してください。
-    対象銘柄: MU (Micron), VRT (Vertiv), 7013 (IHI)
-    
-    出力例:
-    {"MU": {"shares": 10, "cost": 350.0}, "VRT": {"shares": 20, "cost": 250.0}, "IHI": {"shares": 100, "cost": 3400.0}}
-    """
-    response = model.generate_content([prompt, image])
-    # JSON部分のみを抽出（```json ... ``` などの装飾を除去）
-    json_str = re.search(r'\{.*\}', response.text, re.DOTALL).group()
-    return json.loads(json_str)
+    if p["currency"] == "USD":
+        total_profit_usd += profit_base
+        total_profit_jpy += profit_base * USD_JPY_RATE
+    else:
+        total_profit_jpy += profit_base
+        total_profit_usd += profit_base / USD_JPY_RATE
 
-# --- 5. Streamlit UI 構築 ---
-st.set_page_config(page_title="MSCI Exit Strategy Dashboard", layout="wide")
+# --- 4. UI: ヘッダー & カウントダウン ---
+st.title("🚀 1%の投資家：出口戦略ダッシュボード")
 
-st.title("🚀 Strategist Dashboard: AI Scanner & Exit Path")
-
-# --- サイドバー: 画像アップロード ---
-st.sidebar.header("📸 Position Update")
-uploaded_file = st.sidebar.file_uploader("証券口座のスクショをアップロード", type=["png", "jpg", "jpeg"])
-
-if uploaded_file:
-    if st.sidebar.button("AIでポジションを更新"):
-        try:
-            img = Image.open(uploaded_file)
-            new_data = analyze_image(img)
-            # 取得したデータをセッションに反映
-            for ticker, vals in new_data.items():
-                if ticker in st.session_state.portfolio:
-                    st.session_state.portfolio[ticker]["shares"] = vals["shares"]
-                    st.session_state.portfolio[ticker]["cost"] = vals["cost"]
-            st.sidebar.success("解析完了！データを更新しました。")
-        except Exception as e:
-            st.sidebar.error(f"解析エラー: {e}")
-
-# --- メイン画面: カウントダウン ---
-col1, col2 = st.columns(2)
-days_to_ann = (DATE_ANNOUNCEMENT - datetime.now()).days
-days_to_exit = (DATE_EXIT - datetime.now()).days
-
-with col1:
-    st.metric("MSCI発表 (5/12) まで", f"{days_to_ann} 日")
-with col2:
-    st.metric("出口戦略 (5/29) まで", f"{days_to_exit} 日", delta_color="inverse")
+st.subheader("🗓 重要イベント・カウントダウン")
+event_cols = st.columns(len(events))
+for i, event in enumerate(events):
+    days_left = (event["date"] - datetime.now()).days
+    with event_cols[i]:
+        st.metric(label=event["name"], value=f"{days_left}日", delta=f"{event['date'].strftime('%m/%d')}")
 
 st.divider()
 
-# --- メイン画面: ポートフォリオ監視 ---
-st.header("📉 Real-time Portfolio Monitor")
-current_prices = get_live_prices(TICKERS)
- 
-rows = []
-for name, info in st.session_state.portfolio.items():
-    cur_price = current_prices.get(name)
-    if cur_price:
-        profit_loss = (cur_price - info['cost']) / info['cost'] * 100
-        rows.append({
-            "銘柄": name,
-            "保有数": info['shares'],
-            "取得単価": f"{info['cost']:,} {info['currency']}",
-            "現在値": f"{cur_price:,.2f} {info['currency']}",
-            "損益率": f"{profit_loss:+.2f}%"
-        })
+# --- 5. UI: 損益サマリー ---
+st.subheader("💰 総合損益ステータス")
+m1, m2, m3 = st.columns(3)
+m1.metric("現在のドル円レート", f"¥{USD_JPY_RATE}")
+m2.metric("総損益 (USD)", f"${total_profit_usd:,.2f}")
+m3.metric("総損益 (JPY)", f"¥{total_profit_jpy:,.0f}", delta=f"{total_profit_jpy/10000:.1f}万円")
 
-if rows:
-    st.table(pd.DataFrame(rows))
-else:
-    st.write("株価データ取得中...")
+# --- 6. UI: 個別銘柄詳細テーブル ---
+st.subheader("📊 ポジション詳細")
+df = pd.DataFrame(positions)
+df['損益'] = (df['price'] - df['cost']) * df['shares']
+st.table(df)
 
-# --- 戦略メモ ---
+# --- 7. AIコンシェルジュ解析 ---
 st.divider()
-st.subheader("📋 1% Investor's Reminder")
-st.info(f"""
-- **Exit Target:** 2026/05/29 終値リバランスの需要を狙い撃つ。
-- **Focus:** MU, VRT, IHI の3銘柄に集中。ノイズに惑わされない。
-- **Cash Management:** 余力 $10,000 を適切なタイミング（MU押し目など）で投入。
-""")
+st.subheader("🤖 AIコンシェルジュの分析")
 
-if st.button('画面を更新'):
-    st.rerun()
+if st.button("現在の状況をAIで解析する"):
+    try:
+        # 最新のGemini 3.1 Flashを使用
+        model = genai.GenerativeModel('gemini-3.1-flash-preview')
+        
+        prompt = f"""
+        あなたは「1%の投資家」を支える専門コンシェルジュです。
+        以下のデータを分析し、5/29の出口戦略に向けた、品格のあるアドバイスを「普通の日本語の文章」で提供してください。
+        JSONやプログラム形式は禁止です。
+        
+        データ：
+        - 現在のドル円: {USD_JPY_RATE}
+        - 総損益(円): {total_profit_jpy:,.0f}円
+        - MU株価: $421.51 (取得: $368.19)
+        - VRT株価: $287.64 (取得: $257.77)
+        - IHI株価: ¥3391 (取得: ¥3503.7)
+        - 5/29まであと {(events[2]['date'] - datetime.now()).days} 日
+        """
+        
+        response = model.generate_content(prompt)
+        st.write(response.text)
+    except Exception as e:
+        st.error(f"AI解析中にエラーが発生しました: {e}")
