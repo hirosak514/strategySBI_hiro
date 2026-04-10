@@ -7,7 +7,7 @@ from PIL import Image
 # --- 1. アプリの設定 & セキュリティ ---
 st.set_page_config(page_title="1% Investor Dashboard", layout="wide")
 
-# APIキーをSecretsから取得
+# StreamlitのSecretsからAPIキーを安全に取得
 if "GEMINI_API_KEY" in st.secrets:
     API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=API_KEY)
@@ -16,14 +16,20 @@ else:
     st.stop()
 
 # --- 2. データ定義 & レート設定 ---
+# 最新のドル円レート（手動更新用）
 USD_JPY_RATE = 158.45 
 
+# 【画像から解析】保有ポジションデータを直接書き込み
 positions = [
+    # MU (マイクロン): 取得単価 $368.19 / 43株
     {"ticker": "MU", "shares": 43, "price": 421.51, "cost": 368.19, "currency": "USD"},
+    # VRT (バーティブ): 取得単価 $257.77 / 32株
     {"ticker": "VRT", "shares": 32, "price": 287.64, "cost": 257.77, "currency": "USD"},
-    {"ticker": "IHI", "shares": 3312.3, "price": 3312.3, "cost": 3503.7, "currency": "JPY"}, # 現在値に更新
+    # IHI (7013): 取得単価 ¥3,503.7 / 300株 / 現在値 ¥3391
+    {"ticker": "IHI", "shares": 300, "price": 3391.0, "cost": 3503.7, "currency": "JPY"},
 ]
 
+# 重要イベントスケジュール
 events = [
     {"name": "VRT 決算発表", "date": datetime(2026, 4, 22)},
     {"name": "MSCI 採用発表", "date": datetime(2026, 5, 12)},
@@ -67,7 +73,7 @@ m3.metric("総損益 (JPY)", f"¥{total_profit_jpy:,.0f}", delta=f"{total_profit
 # --- 6. UI: 個別銘柄詳細テーブル ---
 with st.expander("📊 ポジション詳細を表示"):
     df = pd.DataFrame(positions)
-    df['損益'] = (df['price'] - df['cost']) * df['shares']
+    df['損益(ベース通貨)'] = (df['price'] - df['cost']) * df['shares']
     st.table(df)
 
 # --- 7. UI: 画像アップロード & AI解析 ---
@@ -88,7 +94,7 @@ with col_b:
 
 if analyze_button:
     try:
-        # 最も汎用性の高いエイリアスを使用
+        # 【重要】画像解析に対応した最新の安定モデル名を使用
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""
@@ -96,9 +102,10 @@ if analyze_button:
         品格のある言葉遣いで、以下のデータを踏まえたアドバイスを「普通の日本語」で提供してください。
         
         【現在の状況】
+        - ドル円: {USD_JPY_RATE}
         - 総損益(円): {total_profit_jpy:,.0f}円
         - 出口(5/29)まで残り: {(events[2]['date'] - datetime.now()).days}日
-        - ユーザーの質問: {user_question if user_question else "現状を分析してください"}
+        - ユーザーの質問: {user_question if user_question else "画像とデータから現状を分析してください"}
         """
         
         if uploaded_file is not None:
@@ -111,5 +118,5 @@ if analyze_button:
         st.info(response.text)
         
     except Exception as e:
-        st.error(f"エラーが発生しました。詳細は以下をご確認ください。")
+        st.error(f"解析中にエラーが発生しました。詳細は以下をご確認ください。")
         st.write(f"エラー詳細: {e}")
