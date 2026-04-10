@@ -52,7 +52,6 @@ if 'edit_mode' not in st.session_state:
 
 # --- 2. API設定 ---
 if st.session_state.api_key:
-    # 修正ポイント: 明示的にAPIキーを設定
     genai.configure(api_key=st.session_state.api_key)
 
 # --- 3. 定数・重要日程 ---
@@ -80,30 +79,28 @@ def analyze_multiple_images(uploaded_files):
     if not st.session_state.api_key:
         raise ValueError("APIキーが設定されていません。")
     
-    # 【解決策】モデル名の指定方法を「最も標準的」なものに変更
-    # 環境によっては 'models/' が不要、あるいは特定バージョンが必要なため
+    # 【改修点】古いライブラリでも認識可能な最もシンプルな指定
     try:
-        # 最新の安定版をエイリアスなしで指定
         model = genai.GenerativeModel('gemini-1.5-flash')
-    except Exception:
-        # フォールバックとして古い指定形式も試す
+    except:
         model = genai.GenerativeModel('models/gemini-1.5-flash')
     
-    prompt = """証券口座のスクリーンショットを分析し、MU, VRT, NEE, IHI(LONG/SHORT)の合計ポジションを抽出し、以下のJSON形式でのみ回答してください。
-    {"MU": {"shares": 10, "cost": 100.0}, "VRT": {"shares": 20, "cost": 200.0}, "NEE": {"shares": 30, "cost": 50.0}, "IHI_LONG": {"shares": 100, "cost": 3000.0}, "IHI_SHORT": {"shares": 50, "cost": 3100.0}}"""
+    # プロンプト側で「JSONのみ返せ」と強く命令する（mime_typeを使わない手法）
+    prompt = """
+    証券画面のスクショから MU, VRT, NEE, IHI(LONG/SHORT) の株数と取得単価を抽出してください。
+    必ず以下のJSON形式のみで出力してください。余計な説明は一切不要です。
+    {"MU": {"shares": 0, "cost": 0.0}, "VRT": {"shares": 0, "cost": 0.0}, "NEE": {"shares": 0, "cost": 0.0}, "IHI_LONG": {"shares": 0, "cost": 0.0}, "IHI_SHORT": {"shares": 0, "cost": 0.0}}
+    """
     
     images = [Image.open(f) for f in uploaded_files]
     
-    # 生成パラメータを明示的に指定して互換性を高める
-    response = model.generate_content(
-        contents=[prompt] + images,
-        generation_config={"mime_type": "application/json"} # 出力をJSONに固定
-    )
+    # 【改修点】mime_type 指定を削除し、純粋な引数のみにする
+    response = model.generate_content([prompt] + images)
     
-    # 応答からJSONを抽出
+    # 応答からJSON部分を正規表現で抜き出す
     json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
     if not json_match:
-        raise ValueError(f"AIの応答を解析できませんでした。内容: {response.text[:100]}")
+        raise ValueError("AIの応答からJSONを抽出できませんでした。")
         
     return json.loads(json_match.group())
 
@@ -116,6 +113,7 @@ input_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_k
 if st.sidebar.button("APIキーを保存"):
     st.session_state.api_key = input_key
     save_json(CONFIG_FILE, {"gemini_key": input_key})
+    st.sidebar.success("Key saved!")
     st.rerun()
 
 st.sidebar.divider()
@@ -136,8 +134,7 @@ if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
         except Exception as e:
             st.sidebar.error(f"解析エラー: {e}")
 
-# ... (中略: Event Manager, Reminder Editor は以前のコードと同一) ...
-# サイドバー: 📅 Event Manager
+# ... (中略: Event Manager, Reminder Editor は以前と同一) ...
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 new_event_name = st.sidebar.text_input("イベント名を入力")
@@ -156,7 +153,6 @@ if st.sidebar.button("削除"):
     save_json(EVENT_FILE, st.session_state.events)
     st.rerun()
 
-# サイドバー: 📝 Reminder Editor
 st.sidebar.divider()
 st.sidebar.header("📝 Reminder Editor")
 col_ir1, col_ir2 = st.sidebar.columns(2)
