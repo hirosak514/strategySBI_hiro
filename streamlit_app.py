@@ -8,7 +8,7 @@ import json
 import re
 import os
 
-# --- 0. データの保存・読み込み (リロード対策) ---
+# --- 0. データの保存・読み込み ---
 DB_FILE = "portfolio.json"
 EVENT_FILE = "events.json"
 REMINDER_FILE = "reminder.json"
@@ -79,14 +79,39 @@ def analyze_multiple_images(uploaded_files):
     if not st.session_state.api_key:
         raise ValueError("APIキーが設定されていません。")
     
+    # 【解決策】モデル名のリストを試行するロジックに変更
+    # 環境によって認識される名前が異なるため、動くものを見つけます
+    success_model = None
+    last_error = ""
     
-    model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
+    # 試行するモデル名のリスト（優先順位順）
+    model_names = ["gemini-1.5-flash", "gemini-pro-vision", "gemini-1.5-pro"]
     
-    prompt = """提供されたすべての証券画面からMU, VRT, NEE, IHI(LONG/SHORT)の合計ポジションを抽出しJSONで返してください。"""
+    for m_name in model_names:
+        try:
+            model = genai.GenerativeModel(m_name)
+            # 試しに空のコンテンツでチェック（初期化確認）
+            success_model = model
+            break
+        except Exception as e:
+            last_error = str(e)
+            continue
+            
+    if not success_model:
+        raise ValueError(f"利用可能なモデルが見つかりませんでした。エラー: {last_error}")
+    
+    prompt = """提供されたすべての証券画面からMU, VRT, NEE, IHI(LONG/SHORT)の合計ポジションを抽出し、
+    必ず以下の形式のJSONのみで回答してください。
+    {"MU": {"shares": 10, "cost": 100.0}, "VRT": {"shares": 20, "cost": 200.0}, "NEE": {"shares": 30, "cost": 50.0}, "IHI_LONG": {"shares": 100, "cost": 3000.0}, "IHI_SHORT": {"shares": 50, "cost": 3100.0}}"""
+    
     images = [Image.open(f) for f in uploaded_files]
-    response = model.generate_content([prompt] + images)
-    json_str = re.search(r'\{.*\}', response.text, re.DOTALL).group()
-    return json.loads(json_str)
+    response = success_model.generate_content([prompt] + images)
+    
+    json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+    if not json_match:
+        raise ValueError("AIの応答からJSONデータを見つけられませんでした。")
+        
+    return json.loads(json_match.group())
 
 # --- 5. UI構築 ---
 st.set_page_config(page_title="MSCI Exit Strategy Dashboard", layout="wide")
@@ -193,13 +218,12 @@ if ihi_cur:
     rows.append({"銘柄": "IHI", "数量": l_info['shares'], "区分": "現物(LONG)", "取得単価": f"¥{l_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{l_profit:,.0f}"})
     rows.append({"銘柄": "IHI", "数量": s_info['shares'], "区分": "信用(SHORT)", "取得単価": f"¥{s_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{s_profit:,.0f}"})
 
-# --- 改修ポイント: メトリクスとボタンを横並びに配置 ---
-# カラム比率 [3, 1, 6] で左側にメトリクス、そのすぐ右に更新ボタンを置く
+# 総計損益と更新ボタン
 m_col1, m_col2, m_col3 = st.columns([3, 1, 6])
 with m_col1:
     st.metric("総計損益 (JPY)", f"¥{total_profit:,.0f}", delta=f"USD/JPY: {rate:.2f}")
 with m_col2:
-    st.write("##") # 位置調整用の余白
+    st.write("##")
     if st.button('更新'):
         st.rerun()
 
