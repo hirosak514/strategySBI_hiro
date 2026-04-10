@@ -5,7 +5,8 @@ import pandas as pd
 from PIL import Image
 
 # --- 1. アプリ設定 & API接続 ---
-st.set_page_config(page_title="1% Investor Dashboard", layout="wide")
+# 初期の使いやすい「センターレイアウト」に設定
+st.set_page_config(page_title="1% Investor Dashboard", layout="centered")
 
 # SecretsからAPIキーを取得
 if "GEMINI_API_KEY" in st.secrets:
@@ -14,7 +15,7 @@ else:
     st.error("Secretsに 'GEMINI_API_KEY' が登録されていません。")
     st.stop()
 
-# --- 2. 統合済みポジションデータ (画像より完全集計) ---
+# --- 2. 統合済みポジションデータ (image_d516e6.jpgより全保有分を合算) ---
 # 2026/04/10時点 レート: 158.45
 USD_JPY_RATE = 158.45 
 
@@ -34,33 +35,31 @@ for p in positions:
     else:
         total_profit_jpy += (diff * p["shares"])
 
-# --- 4. メイン表示 (初期の使いやすいデザインを再現) ---
+# --- 4. メイン表示 (最初期の直感的なデザイン) ---
 st.title("🚀 1%の投資家：出口戦略ダッシュボード")
 
-st.subheader("🗓 重要イベント・カウントダウン")
-col_ev1, col_ev2, col_ev3 = st.columns(3)
-days_to_goal = (datetime(2026, 5, 29) - datetime.now()).days
-col_ev1.metric("VRT 決算発表 (4/22)", f"あと 12 日")
-col_ev2.metric("MSCI 採用 (5/12)", f"あと 32 日")
-col_ev3.metric("出口戦略 (5/29)", f"あと {days_to_goal} 日")
+# カウントダウンセクション
+st.header("🗓 カウントダウン")
+days_left = (datetime(2026, 5, 29) - datetime.now()).days
+st.metric("5/29 出口ターゲットまで", f"あと {days_left} 日")
 
 st.divider()
 
-st.subheader("💰 総合損益ステータス")
-m1, m2, m3 = st.columns(3)
-m1.metric("現在のドル円レート", f"¥{USD_JPY_RATE}")
-m2.metric("総損益 (JPY)", f"¥{total_profit_jpy:,.0f}", delta=f"{total_profit_jpy/10000:.1f}万円")
-m3.metric("目標進捗", "順調")
+# 総合損益ステータス
+st.header("💰 総合損益状況")
+st.metric("総損益 (円計)", f"¥{total_profit_jpy:,.0f}", delta=f"{total_profit_jpy/10000:.1f}万円")
+st.write(f"（ベース為替レート: 1ドル = ¥{USD_JPY_RATE}）")
 
-st.subheader("📊 ポジション詳細")
+# ポジション詳細
+st.header("📊 統合ポジション詳細")
 df = pd.DataFrame(positions)
 df['損益'] = (df['price'] - df['cost']) * df['shares']
 st.table(df)
 
 st.divider()
 
-# --- 5. 画像解析セクション ---
-st.subheader("📸 AI解析コンシェルジュ")
+# --- 5. AI解析セクション (安定モデル版) ---
+st.header("📸 AIコンシェルジュ解析")
 uploaded_file = st.file_uploader("チャート画像などをアップロード", type=["png", "jpg", "jpeg"])
 
 if uploaded_file:
@@ -71,9 +70,10 @@ user_question = st.text_input("AIへの質問を入力してください")
 
 if st.button("AIコンシェルジュに相談する"):
     try:
-        # 【重要】404エラー回避のため、最も確実に認識される旧モデル名を指定
-        # Streamlit Cloudの環境が古くても動く名称です
-        model = genai.GenerativeModel('gemini-pro-vision' if uploaded_file else 'gemini-pro')
+        # 【重要】404エラーを回避するため、現在の環境で最も安定しているモデル名を使用
+        # 画像がある場合は 'gemini-pro-vision'、ない場合は 'gemini-pro' を使用
+        model_name = 'gemini-pro-vision' if uploaded_file else 'gemini-pro'
+        model = genai.GenerativeModel(model_name)
         
         prompt = f"""
         あなたは「1%の投資家」の専属コンシェルジュです。
@@ -91,10 +91,10 @@ if st.button("AIコンシェルジュに相談する"):
         st.info(response.text)
         
     except Exception as e:
-        # 万が一これでもダメな場合のみ、代替モデルを試行
+        # 万が一上記でもダメな場合、フォールバックとしてflashの別名を試行
         try:
             model = genai.GenerativeModel('gemini-1.5-flash-latest')
             response = model.generate_content([prompt, img] if uploaded_file else prompt)
             st.info(response.text)
         except:
-            st.error("解析エラーが発生しました。時間を置いてお試しいただくか、アプリを再起動してください。")
+            st.error("解析エラーが発生しました。APIキーの設定を確認するか、しばらく時間をおいてお試しください。")
