@@ -52,6 +52,7 @@ if 'edit_mode' not in st.session_state:
 
 # --- 2. API設定 ---
 if st.session_state.api_key:
+    # 修正ポイント: 明示的にAPIキーを設定
     genai.configure(api_key=st.session_state.api_key)
 
 # --- 3. 定数・重要日程 ---
@@ -79,37 +80,30 @@ def analyze_multiple_images(uploaded_files):
     if not st.session_state.api_key:
         raise ValueError("APIキーが設定されていません。")
     
-    # 【解決策】モデル名のリストを試行するロジックに変更
-    # 環境によって認識される名前が異なるため、動くものを見つけます
-    success_model = None
-    last_error = ""
+    # 【解決策】モデル名の指定方法を「最も標準的」なものに変更
+    # 環境によっては 'models/' が不要、あるいは特定バージョンが必要なため
+    try:
+        # 最新の安定版をエイリアスなしで指定
+        model = genai.GenerativeModel('gemini-1.5-flash')
+    except Exception:
+        # フォールバックとして古い指定形式も試す
+        model = genai.GenerativeModel('models/gemini-1.5-flash')
     
-    # 試行するモデル名のリスト（優先順位順）
-    model_names = ["gemini-1.5-flash", "gemini-pro-vision", "gemini-1.5-pro"]
-    
-    for m_name in model_names:
-        try:
-            model = genai.GenerativeModel(m_name)
-            # 試しに空のコンテンツでチェック（初期化確認）
-            success_model = model
-            break
-        except Exception as e:
-            last_error = str(e)
-            continue
-            
-    if not success_model:
-        raise ValueError(f"利用可能なモデルが見つかりませんでした。エラー: {last_error}")
-    
-    prompt = """提供されたすべての証券画面からMU, VRT, NEE, IHI(LONG/SHORT)の合計ポジションを抽出し、
-    必ず以下の形式のJSONのみで回答してください。
+    prompt = """証券口座のスクリーンショットを分析し、MU, VRT, NEE, IHI(LONG/SHORT)の合計ポジションを抽出し、以下のJSON形式でのみ回答してください。
     {"MU": {"shares": 10, "cost": 100.0}, "VRT": {"shares": 20, "cost": 200.0}, "NEE": {"shares": 30, "cost": 50.0}, "IHI_LONG": {"shares": 100, "cost": 3000.0}, "IHI_SHORT": {"shares": 50, "cost": 3100.0}}"""
     
     images = [Image.open(f) for f in uploaded_files]
-    response = success_model.generate_content([prompt] + images)
     
+    # 生成パラメータを明示的に指定して互換性を高める
+    response = model.generate_content(
+        contents=[prompt] + images,
+        generation_config={"mime_type": "application/json"} # 出力をJSONに固定
+    )
+    
+    # 応答からJSONを抽出
     json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
     if not json_match:
-        raise ValueError("AIの応答からJSONデータを見つけられませんでした。")
+        raise ValueError(f"AIの応答を解析できませんでした。内容: {response.text[:100]}")
         
     return json.loads(json_match.group())
 
@@ -128,7 +122,7 @@ st.sidebar.divider()
 
 # サイドバー: 画像アップロード
 st.sidebar.header("📸 Multi-Position Update")
-uploaded_files = st.sidebar.file_uploader("スクショをドラッグ＆ドロップ (複数可)", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+uploaded_files = st.sidebar.file_uploader("スクショをドラッグ＆ドロップ", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
 if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
     with st.sidebar.spinner("解析中..."):
@@ -142,6 +136,7 @@ if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
         except Exception as e:
             st.sidebar.error(f"解析エラー: {e}")
 
+# ... (中略: Event Manager, Reminder Editor は以前のコードと同一) ...
 # サイドバー: 📅 Event Manager
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
@@ -175,9 +170,8 @@ if col_ir2.button("登録", key="save_ir"):
 if st.session_state.edit_mode:
     st.session_state.reminder_text = st.sidebar.text_area("内容を編集", value=st.session_state.reminder_text, height=200)
 
-# --- メイン画面表示 ---
-st.title("🚀 Strategist Dashboard: AI Scanner & Exit Path")
-
+# メイン画面表示
+st.title("🚀 Strategist Dashboard: AI Scanner")
 col_fixed1, col_fixed2 = st.columns(2)
 days_to_ann = (DATE_ANNOUNCEMENT - datetime.now()).days
 days_to_exit = (DATE_EXIT - datetime.now()).days
@@ -192,8 +186,6 @@ if st.session_state.events:
         with cols[i]: st.metric(f"No.{event['id']}: {event['name']}", f"{(e_date - datetime.now()).days} 日")
 
 st.divider()
-
-# --- ポートフォリオ監視セクション ---
 st.header("📉 Real-time Portfolio Monitor")
 current_prices = get_live_prices(TICKERS)
 rate = current_prices.get("USDJPY", 159.2)
@@ -218,7 +210,6 @@ if ihi_cur:
     rows.append({"銘柄": "IHI", "数量": l_info['shares'], "区分": "現物(LONG)", "取得単価": f"¥{l_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{l_profit:,.0f}"})
     rows.append({"銘柄": "IHI", "数量": s_info['shares'], "区分": "信用(SHORT)", "取得単価": f"¥{s_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{s_profit:,.0f}"})
 
-# 総計損益と更新ボタン
 m_col1, m_col2, m_col3 = st.columns([3, 1, 6])
 with m_col1:
     st.metric("総計損益 (JPY)", f"¥{total_profit:,.0f}", delta=f"USD/JPY: {rate:.2f}")
@@ -228,7 +219,6 @@ with m_col2:
         st.rerun()
 
 if rows: st.table(pd.DataFrame(rows))
-
 st.divider()
 st.subheader("📋 1% Investor's Reminder")
 st.info(st.session_state.reminder_text)
