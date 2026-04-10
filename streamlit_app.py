@@ -12,6 +12,7 @@ import os
 # --- 0. データの保存・読み込み (リロード対策) ---
 DB_FILE = "portfolio.json"
 EVENT_FILE = "events.json"
+REMINDER_FILE = "reminder.json"
 
 def load_data():
     if os.path.exists(DB_FILE):
@@ -45,6 +46,21 @@ def save_events(events):
     with open(EVENT_FILE, "w") as f:
         json.dump(events, f)
 
+def load_reminder():
+    if os.path.exists(REMINDER_FILE):
+        try:
+            with open(REMINDER_FILE, "r") as f:
+                return json.load(f)
+        except:
+            pass
+    return """- **Exit Target:** 2026/05/29 終値リバランスの需要を狙い撃つ。
+- **Focus:** MU, VRT, IHI の3銘柄に集中。IHIは信用売りを活用したヘッジを継続。
+- **Cash Management:** 余力 $10,000 を適切なタイミングで投入。"""
+
+def save_reminder(text):
+    with open(REMINDER_FILE, "w") as f:
+        json.dump(text, f)
+
 # --- 1. セキュリティ設定 (Gemini API) ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -62,6 +78,10 @@ if 'portfolio' not in st.session_state:
     st.session_state.portfolio = load_data()
 if 'events' not in st.session_state:
     st.session_state.events = load_events()
+if 'reminder_text' not in st.session_state:
+    st.session_state.reminder_text = load_reminder()
+if 'edit_mode' not in st.session_state:
+    st.session_state.edit_mode = False
 
 # --- 4. 関数定義 ---
 def get_live_prices(tickers_dict):
@@ -118,37 +138,42 @@ if uploaded_file:
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 
-# イベント登録フォーム
 new_event_name = st.sidebar.text_input("イベント名を入力")
 new_event_date = st.sidebar.date_input("日付を選択", value=datetime.now())
 
 if st.sidebar.button("登録"):
     if new_event_name:
-        # 新しいイベントを追加 (IDはリストの長さ+1)
         event_id = len(st.session_state.events) + 1
-        new_event = {
-            "id": event_id,
-            "name": new_event_name,
-            "date": new_event_date.strftime("%Y-%m-%d")
-        }
+        new_event = {"id": event_id, "name": new_event_name, "date": new_event_date.strftime("%Y-%m-%d")}
         st.session_state.events.append(new_event)
         save_events(st.session_state.events)
-        st.sidebar.success(f"No.{event_id} を登録しました")
         st.rerun()
 
 st.sidebar.divider()
-
-# イベント削除フォーム
 del_id = st.sidebar.number_input("削除するイベントNo", min_value=1, step=1)
 if st.sidebar.button("削除"):
-    # 指定されたIDのイベントを除外
     st.session_state.events = [e for e in st.session_state.events if e['id'] != del_id]
-    # IDを振り直す
     for i, e in enumerate(st.session_state.events):
         e['id'] = i + 1
     save_events(st.session_state.events)
-    st.sidebar.warning(f"No.{del_id} を削除しました")
     st.rerun()
+
+# --- IR編集機能の追加 ---
+st.sidebar.divider()
+st.sidebar.header("📝 Reminder Editor")
+col_ir1, col_ir2 = st.sidebar.columns(2)
+if col_ir1.button("IR編集"):
+    st.session_state.edit_mode = True
+    st.rerun()
+
+if col_ir2.button("登録", key="save_ir"):
+    save_reminder(st.session_state.reminder_text)
+    st.session_state.edit_mode = False
+    st.sidebar.success("Reminderを更新しました")
+    st.rerun()
+
+if st.session_state.edit_mode:
+    st.session_state.reminder_text = st.sidebar.text_area("内容を編集", value=st.session_state.reminder_text, height=200)
 
 # --- メイン画面: カウントダウン ---
 col_fixed1, col_fixed2 = st.columns(2)
@@ -160,7 +185,6 @@ with col_fixed1:
 with col_fixed2:
     st.metric("出口戦略 (5/29) まで", f"{days_to_exit} 日", delta_color="inverse")
 
-# --- 追加されたカスタムイベントの表示 ---
 if st.session_state.events:
     st.write("📌 **追加イベント**")
     cols = st.columns(len(st.session_state.events))
@@ -168,7 +192,7 @@ if st.session_state.events:
         e_date = datetime.strptime(event['date'], "%Y-%m-%d")
         e_days = (e_date - datetime.now()).days
         with cols[i]:
-            st.metric(f"No.{event['id']}: {event['name']}", f"{e_days} 日", help=f"設定日: {event['date']}")
+            st.metric(f"No.{event['id']}: {event['name']}", f"{e_days} 日")
 
 st.divider()
 
@@ -186,11 +210,7 @@ for name in ["MU", "VRT", "NEE"]:
     if cur_price:
         profit = (cur_price - info['cost']) * info['shares'] * rate
         total_profit += profit
-        rows.append({
-            "銘柄": name, "数量": info['shares'], "区分": "現物",
-            "取得単価": f"${info['cost']:,}", "現在値": f"${cur_price:,.2f}",
-            "損益(円)": f"¥{profit:,.0f}"
-        })
+        rows.append({"銘柄": name, "数量": info['shares'], "区分": "現物", "取得単価": f"${info['cost']:,}", "現在値": f"${cur_price:,.2f}", "損益(円)": f"¥{profit:,.0f}"})
 
 ihi_cur = current_prices.get("IHI")
 if ihi_cur:
@@ -211,11 +231,7 @@ else:
 
 st.divider()
 st.subheader("📋 1% Investor's Reminder")
-st.info(f"""
-- **Exit Target:** 2026/05/29 終値リバランスの需要を狙い撃つ。
-- **Focus:** MU, VRT, IHI の3銘柄に集中。IHIは信用売りを活用したヘッジを継続。
-- **Cash Management:** 余力 $10,000 を適切なタイミングで投入。
-""")
+st.info(st.session_state.reminder_text)
 
 if st.button('画面を更新'):
     st.rerun()
