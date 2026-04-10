@@ -2,16 +2,18 @@ import streamlit as st
 import google.generativeai as genai
 from datetime import datetime
 import pandas as pd
+from PIL import Image
 
 # --- 1. アプリの設定 ---
 st.set_page_config(page_title="1% Investor Dashboard", layout="wide")
 
-# APIキーの設定（StreamlitのSecretsに設定することを推奨）
-# genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-genai.configure(api_key="YOUR_API_KEY_HERE") # テスト用。本来はSecretsを使用
+# APIキーの設定
+# StreamlitのSecretsを使う場合は st.secrets["GEMINI_API_KEY"] に書き換えてください
+API_KEY = "YOUR_API_KEY_HERE" 
+genai.configure(api_key=API_KEY)
 
 # --- 2. データ定義 & レート設定 ---
-# 最新のドル円レート（2026/04/10 時点。API連携がない場合はここを手動更新）
+# 最新のドル円レート（手動更新用）
 USD_JPY_RATE = 158.45 
 
 # 保有ポジションデータ
@@ -63,35 +65,52 @@ m2.metric("総損益 (USD)", f"${total_profit_usd:,.2f}")
 m3.metric("総損益 (JPY)", f"¥{total_profit_jpy:,.0f}", delta=f"{total_profit_jpy/10000:.1f}万円")
 
 # --- 6. UI: 個別銘柄詳細テーブル ---
-st.subheader("📊 ポジション詳細")
-df = pd.DataFrame(positions)
-df['損益'] = (df['price'] - df['cost']) * df['shares']
-st.table(df)
+with st.expander("📊 ポジション詳細を表示"):
+    df = pd.DataFrame(positions)
+    df['損益(ベース通貨)'] = (df['price'] - df['cost']) * df['shares']
+    st.table(df)
 
-# --- 7. AIコンシェルジュ解析 ---
+# --- 7. UI: 画像アップロード & AI解析 ---
 st.divider()
-st.subheader("🤖 AIコンシェルジュの分析")
+st.subheader("📸 チャート解析 & AIコンシェルジュ")
 
-if st.button("現在の状況をAIで解析する"):
+col_a, col_b = st.columns([1, 1])
+
+with col_a:
+    uploaded_file = st.file_uploader("チャートやエラー画面をアップロード", type=["png", "jpg", "jpeg"])
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        st.image(image, caption='アップロードされた画像', use_container_width=True)
+
+with col_b:
+    user_question = st.text_input("AIへの質問（例：このチャートの展望は？、エラーの直し方は？）")
+    analyze_button = st.button("AIコンシェルジュに相談する")
+
+if analyze_button:
     try:
         # 最新のGemini 3.1 Flashを使用
         model = genai.GenerativeModel('gemini-3.1-flash-preview')
         
+        # 解析用のプロンプト作成
         prompt = f"""
         あなたは「1%の投資家」を支える専門コンシェルジュです。
-        以下のデータを分析し、5/29の出口戦略に向けた、品格のあるアドバイスを「普通の日本語の文章」で提供してください。
-        JSONやプログラム形式は禁止です。
+        品格のある言葉遣いで、以下のデータを踏まえたアドバイスを「普通の日本語」で提供してください。
+        JSON形式やプログラムコードのみの回答は禁止です。
         
-        データ：
-        - 現在のドル円: {USD_JPY_RATE}
+        【現在の状況】
+        - ドル円: {USD_JPY_RATE}
         - 総損益(円): {total_profit_jpy:,.0f}円
-        - MU株価: $421.51 (取得: $368.19)
-        - VRT株価: $287.64 (取得: $257.77)
-        - IHI株価: ¥3391 (取得: ¥3503.7)
-        - 5/29まであと {(events[2]['date'] - datetime.now()).days} 日
+        - 5/29まで残り: {(events[2]['date'] - datetime.now()).days}日
+        - ユーザーの質問: {user_question if user_question else "現在の状況を分析してください"}
         """
         
-        response = model.generate_content(prompt)
-        st.write(response.text)
+        # 画像がある場合とない場合で処理を分岐
+        if uploaded_file is not None:
+            response = model.generate_content([prompt, image])
+        else:
+            response = model.generate_content(prompt)
+            
+        st.info(response.text)
+        
     except Exception as e:
-        st.error(f"AI解析中にエラーが発生しました: {e}")
+        st.error(f"解析中にエラーが発生しました。モデル名やAPIキーを確認してください: {e}")
