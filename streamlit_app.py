@@ -38,6 +38,9 @@ if 'api_key' not in st.session_state:
     st.session_state.api_key = load_json(CONFIG_FILE, {"gemini_key": ""})["gemini_key"]
 if 'edit_mode' not in st.session_state:
     st.session_state.edit_mode = False
+# 【追加】ヘルプ表示状態を管理するフラグ
+if 'show_help' not in st.session_state:
+    st.session_state.show_help = False
 
 # --- 2. API設定 ---
 if st.session_state.api_key:
@@ -97,7 +100,6 @@ st.set_page_config(page_title="MSCI Exit Strategy Dashboard", layout="wide")
 st.sidebar.header("🔑 System Settings")
 input_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
 
-# 【改修点】APIキー保存とヘルプボタンを横並びに配置
 col_api1, col_api2 = st.sidebar.columns(2)
 if col_api1.button("APIキーを保存", use_container_width=True):
     st.session_state.api_key = input_key
@@ -105,10 +107,13 @@ if col_api1.button("APIキーを保存", use_container_width=True):
     st.sidebar.success("Key saved!")
     st.rerun()
 
-show_help = col_api2.button("APIキーとは", use_container_width=True)
+# 【改修点】ボタンを押すごとにTrue/Falseを切り替える
+if col_api2.button("APIキーとは", use_container_width=True):
+    st.session_state.show_help = not st.session_state.show_help
+    st.rerun()
 
-# ヘルプ表示（ボタン押下時に展開）
-if show_help:
+# show_helpがTrueのときだけ表示
+if st.session_state.show_help:
     st.sidebar.info("""
     **Gemini APIキーの取得方法**
     1. [Google AI Studio](https://aistudio.google.com/app/apikey) にアクセス。
