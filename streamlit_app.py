@@ -54,12 +54,11 @@ if current_api_key:
 DATE_ANNOUNCEMENT = datetime(2026, 5, 12)
 DATE_EXIT = datetime(2026, 5, 29)
 
-# --- 4. 解析・価格取得関数 (1つ前のロジックを完全踏襲) ---
+# --- 4. 解析・価格取得関数 (完全踏襲ロジック) ---
 def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。")
     
-    # 【完全踏襲】利用可能なモデルをリストアップしてFlashを選択するロジック
     available_models = []
     try:
         for m in genai.list_models():
@@ -68,7 +67,6 @@ def analyze_multiple_images(uploaded_files):
     except Exception as e:
         raise ValueError(f"モデルリスト取得エラー: {e}")
 
-    # "flash"が含まれるモデルを優先的に選択
     target_model = next((m for m in available_models if "flash" in m), available_models[0])
     model = genai.GenerativeModel(target_model)
     
@@ -123,11 +121,24 @@ if col_api1.button("APIキーを保存", use_container_width=True):
     save_json(CONFIG_FILE, {"gemini_key": input_key})
     st.sidebar.success("Key saved!")
     st.rerun()
+
+# 【修正】APIキー説明の改善（リンク追加、初心者向け表現）
 if col_api2.button("APIキーとは", use_container_width=True):
     st.session_state.show_help = not st.session_state.show_help
     st.rerun()
+
 if st.session_state.show_help:
-    st.sidebar.info("Google AI Studioでキーを取得してください。")
+    st.sidebar.info("""
+    **APIキーとは？（初心者向け案内）**
+    
+    このツールが「証券会社の画像を読み取る」ために必要な、**GoogleのAI（Gemini）を利用するための「鍵」**です。
+    
+    **取得方法（完全無料）**
+    1.  以下のリンクをクリックして、Google AI Studioのページを開きます（Googleアカウントへのログインが必要です）。
+        * 👉 **[APIキーを取得する (Google AI Studio)](https://aistudio.google.com/app/apikey)**
+    2.  ページ内にある **'Create API key'**（青いボタン）をクリックします。
+    3.  生成された「鍵（長い英数字の列）」をコピーして、上の入力欄に貼り付けてください。
+    """)
 
 st.sidebar.divider()
 st.sidebar.header("📸 Multi-Position Update")
@@ -143,7 +154,7 @@ if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
             st.rerun()
         except Exception as e: st.sidebar.error(f"解析エラー: {e}")
 
-# イベント・リマインダー管理
+# イベント・リマインダー管理 (完全踏襲)
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 new_event_name = st.sidebar.text_input("イベント名を入力")
@@ -196,7 +207,13 @@ total_profit_usd_only_us_stocks = 0
 for key, info in st.session_state.portfolio.items():
     cur = current_prices.get(key)
     if cur and info['shares'] > 0:
-        display_name = f"{key.split('_')[0]} {info.get('name', '')}"
+        
+        # 【修正】日本株の銘柄表示を「コード + 名前」に変更
+        raw_code = key.split('_')[0]
+        if raw_code.isdigit() and len(raw_code) == 4:
+            display_name = f"{raw_code} {info.get('name', '')}" # 例：7013 IHI
+        else:
+            display_name = f"{raw_code} {info.get('name', '')}" # 米国株など
         
         # 区分判定
         if "_SHORT" in key:
