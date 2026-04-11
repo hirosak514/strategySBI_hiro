@@ -54,7 +54,7 @@ if current_api_key:
 DATE_ANNOUNCEMENT = datetime(2026, 5, 12)
 DATE_EXIT = datetime(2026, 5, 29)
 
-# --- 4. 解析・価格取得関数 (完全踏襲ロジック) ---
+# --- 4. 解析・価格取得関数 ---
 def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。")
@@ -122,7 +122,6 @@ if col_api1.button("APIキーを保存", use_container_width=True):
     st.sidebar.success("Key saved!")
     st.rerun()
 
-# 【修正】APIキー説明の改善（リンク追加、初心者向け表現）
 if col_api2.button("APIキーとは", use_container_width=True):
     st.session_state.show_help = not st.session_state.show_help
     st.rerun()
@@ -134,10 +133,10 @@ if st.session_state.show_help:
     このツールが「証券会社の画像を読み取る」ために必要な、**GoogleのAI（Gemini）を利用するための「鍵」**です。
     
     **取得方法（完全無料）**
-    1.  以下のリンクをクリックして、Google AI Studioのページを開きます（Googleアカウントへのログインが必要です）。
+    1.  以下のリンクをクリックして、Google AI Studioのページを開きます。
         * 👉 **[APIキーを取得する (Google AI Studio)](https://aistudio.google.com/app/apikey)**
-    2.  ページ内にある **'Create API key'**（青いボタン）をクリックします。
-    3.  生成された「鍵（長い英数字の列）」をコピーして、上の入力欄に貼り付けてください。
+    2.  ページ内にある **'Create API key'** をクリックします。
+    3.  生成されたコードをコピーして、上の入力欄に貼り付けてください。
     """)
 
 st.sidebar.divider()
@@ -148,13 +147,12 @@ if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
     with st.sidebar.spinner("解析中..."):
         try:
             new_data = analyze_multiple_images(uploaded_files)
-            # 重複を防ぐため解析結果を反映
             st.session_state.portfolio = new_data
             save_json(DB_FILE, st.session_state.portfolio)
             st.rerun()
         except Exception as e: st.sidebar.error(f"解析エラー: {e}")
 
-# イベント・リマインダー管理 (完全踏襲)
+# イベント・リマインダー管理
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 new_event_name = st.sidebar.text_input("イベント名を入力")
@@ -188,12 +186,14 @@ col_f1, col_f2 = st.columns(2)
 with col_f1: st.metric("MSCI発表まで", f"{(DATE_ANNOUNCEMENT - datetime.now()).days} 日")
 with col_f2: st.metric("出口戦略まで", f"{(DATE_EXIT - datetime.now()).days} 日")
 
+# 【修正箇所】年月日を表示に追加
 if st.session_state.events:
     st.write("📌 **追加イベント**")
     cols = st.columns(len(st.session_state.events))
     for i, event in enumerate(st.session_state.events):
         e_date = datetime.strptime(event['date'], "%Y-%m-%d")
-        with cols[i]: st.metric(f"No.{event['id']}: {event['name']}", f"{(e_date - datetime.now()).days} 日")
+        display_date = e_date.strftime("%Y/%m/%d") # 年月日フォーマット
+        with cols[i]: st.metric(f"No.{event['id']}: {display_date} {event['name']}", f"{(e_date - datetime.now()).days} 日")
 
 st.divider()
 st.header("📉 Real-time Portfolio Monitor")
@@ -207,15 +207,12 @@ total_profit_usd_only_us_stocks = 0
 for key, info in st.session_state.portfolio.items():
     cur = current_prices.get(key)
     if cur and info['shares'] > 0:
-        
-        # 【修正】日本株の銘柄表示を「コード + 名前」に変更
         raw_code = key.split('_')[0]
         if raw_code.isdigit() and len(raw_code) == 4:
-            display_name = f"{raw_code} {info.get('name', '')}" # 例：7013 IHI
+            display_name = f"{raw_code} {info.get('name', '')}"
         else:
-            display_name = f"{raw_code} {info.get('name', '')}" # 米国株など
+            display_name = f"{raw_code} {info.get('name', '')}"
         
-        # 区分判定
         if "_SHORT" in key:
             label = "信用(売建)"
             p_jpy = (info['cost'] - cur) * info['shares']
