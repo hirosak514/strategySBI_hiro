@@ -58,12 +58,11 @@ DATE_ANNOUNCEMENT = datetime(2026, 5, 12)
 DATE_EXIT = datetime(2026, 5, 29)
 TICKERS = {"MU": "MU", "VRT": "VRT", "NEE": "NEE", "IHI": "7013.T"}
 
-# --- 4. 解析関数（自動判別ロジック維持） ---
+# --- 4. 解析関数（自動判別ロジック） ---
 def analyze_multiple_images(uploaded_files):
     if not st.session_state.api_key:
         raise ValueError("APIキーが設定されていません。")
     
-    # 利用可能なモデルを自動取得
     available_models = []
     try:
         for m in genai.list_models():
@@ -91,7 +90,6 @@ def analyze_multiple_images(uploaded_files):
         
     return json.loads(json_match.group())
 
-# リアルタイム価格取得
 def get_live_prices(tickers_dict):
     prices = {}
     for name, symbol in tickers_dict.items():
@@ -110,7 +108,7 @@ def get_live_prices(tickers_dict):
 # --- 5. UI構築 ---
 st.set_page_config(page_title="MSCI Exit Strategy Dashboard", layout="wide")
 
-# 【踏襲】サイドバー: APIキー設定
+# サイドバー: APIキー設定
 st.sidebar.header("🔑 System Settings")
 input_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
 if st.sidebar.button("APIキーを保存"):
@@ -120,7 +118,7 @@ if st.sidebar.button("APIキーを保存"):
 
 st.sidebar.divider()
 
-# 【踏襲】サイドバー: 複数画像アップロード
+# サイドバー: 複数画像アップロード
 st.sidebar.header("📸 Multi-Position Update")
 uploaded_files = st.sidebar.file_uploader("スクショをドラッグ＆ドロップ (複数可)", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
@@ -136,7 +134,7 @@ if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
         except Exception as e:
             st.sidebar.error(f"解析エラー: {e}")
 
-# 【踏襲】サイドバー: 📅 Event Manager
+# サイドバー: 📅 Event Manager
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 new_event_name = st.sidebar.text_input("イベント名を入力")
@@ -155,7 +153,7 @@ if st.sidebar.button("削除"):
     save_json(EVENT_FILE, st.session_state.events)
     st.rerun()
 
-# 【踏襲】サイドバー: 📝 Reminder Editor
+# サイドバー: 📝 Reminder Editor
 st.sidebar.divider()
 st.sidebar.header("📝 Reminder Editor")
 col_ir1, col_ir2 = st.sidebar.columns(2)
@@ -172,14 +170,12 @@ if st.session_state.edit_mode:
 # --- メイン画面表示 ---
 st.title("🚀 Strategist Dashboard: AI Scanner & Exit Path")
 
-# 発表・出口カウントダウン
 col_fixed1, col_fixed2 = st.columns(2)
 days_to_ann = (DATE_ANNOUNCEMENT - datetime.now()).days
 days_to_exit = (DATE_EXIT - datetime.now()).days
 with col_fixed1: st.metric("MSCI発表まで", f"{days_to_ann} 日")
 with col_fixed2: st.metric("出口戦略まで", f"{days_to_exit} 日", delta_color="inverse")
 
-# 登録イベントのメトリクス表示
 if st.session_state.events:
     st.write("📌 **追加イベント**")
     cols = st.columns(len(st.session_state.events))
@@ -189,20 +185,24 @@ if st.session_state.events:
 
 st.divider()
 
-# ポートフォリオ監視
+# --- ポートフォリオ監視セクション ---
 st.header("📉 Real-time Portfolio Monitor")
 current_prices = get_live_prices(TICKERS)
 rate = current_prices.get("USDJPY", 159.2)
  
 rows = []
-total_profit = 0
+total_profit_jpy = 0
+total_profit_usd_only_us_stocks = 0  # 米国株のみのドル損益
+
 for name in ["MU", "VRT", "NEE"]:
     info = st.session_state.portfolio[name]
     cur = current_prices.get(name)
     if cur:
-        profit = (cur - info['cost']) * info['shares'] * rate
-        total_profit += profit
-        rows.append({"銘柄": name, "数量": info['shares'], "区分": "現物", "取得単価": f"${info['cost']:,}", "現在値": f"${cur:,.2f}", "損益(円)": f"¥{profit:,.0f}"})
+        profit_usd = (cur - info['cost']) * info['shares']
+        profit_jpy = profit_usd * rate
+        total_profit_jpy += profit_jpy
+        total_profit_usd_only_us_stocks += profit_usd
+        rows.append({"銘柄": name, "数量": info['shares'], "区分": "現物", "取得単価": f"${info['cost']:,}", "現在値": f"${cur:,.2f}", "損益(円)": f"¥{profit_jpy:,.0f}"})
 
 ihi_cur = current_prices.get("IHI")
 if ihi_cur:
@@ -210,15 +210,18 @@ if ihi_cur:
     s_info = st.session_state.portfolio["IHI_SHORT"]
     l_profit = (ihi_cur - l_info['cost']) * l_info['shares']
     s_profit = (s_info['cost'] - ihi_cur) * s_info['shares']
-    total_profit += (l_profit + s_profit)
+    total_profit_jpy += (l_profit + s_profit)
     rows.append({"銘柄": "IHI", "数量": l_info['shares'], "区分": "現物(LONG)", "取得単価": f"¥{l_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{l_profit:,.0f}"})
     rows.append({"銘柄": "IHI", "数量": s_info['shares'], "区分": "信用(SHORT)", "取得単価": f"¥{s_info['cost']:,}", "現在値": f"¥{ihi_cur:,.0f}", "損益(円)": f"¥{s_profit:,.0f}"})
 
-# メトリクスと「更新」ボタン
+# メトリクス表示：円建て総計と、米国株のみのドル建て損益を併記
 m_col1, m_col2, m_col3 = st.columns([3, 1, 6])
 with m_col1:
-    st.metric("総計損益 (JPY)", f"¥{total_profit:,.0f}", delta=f"USD/JPY: {rate:.2f}")
+    st.metric("総計損益 (JPY)", f"¥{total_profit_jpy:,.0f}", delta=f"USD/JPY: {rate:.2f}")
 with m_col2:
+    # 米国株(MU, VRT, NEE)の損益のみをドル表示
+    st.metric("米国株損益 (USD)", f"${total_profit_usd_only_us_stocks:,.2f}")
+with m_col3:
     st.write("##")
     if st.button('更新'):
         st.rerun()
