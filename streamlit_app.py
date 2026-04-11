@@ -50,11 +50,7 @@ if not current_api_key:
 if current_api_key:
     genai.configure(api_key=current_api_key)
 
-# --- 3. 重要日程 ---
-DATE_ANNOUNCEMENT = datetime(2026, 5, 12)
-DATE_EXIT = datetime(2026, 5, 29)
-
-# --- 4. 解析・価格取得関数 ---
+# --- 3. 解析・価格取得関数 ---
 def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。")
@@ -109,8 +105,8 @@ def get_live_prices(portfolio_keys):
         prices["USDJPY"] = 159.2
     return prices
 
-# --- 5. UI構築 ---
-st.set_page_config(page_title="MSCI Exit Strategy Dashboard", layout="wide")
+# --- 4. UI構築 ---
+st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
 # サイドバー設定
 st.sidebar.header("🔑 System Settings")
@@ -182,17 +178,16 @@ if st.session_state.edit_mode:
 
 # --- メイン表示 ---
 st.title("🚀 Strategist Dashboard: AI Scanner")
-col_f1, col_f2 = st.columns(2)
-with col_f1: st.metric("MSCI発表まで", f"{(DATE_ANNOUNCEMENT - datetime.now()).days} 日")
-with col_f2: st.metric("出口戦略まで", f"{(DATE_EXIT - datetime.now()).days} 日")
 
-# 【修正箇所】年月日を表示に追加
+# 【改修点】デフォルトのMSCI/出口戦略メトリクスを削除
+
+# 登録済みイベントの表示
 if st.session_state.events:
     st.write("📌 **追加イベント**")
     cols = st.columns(len(st.session_state.events))
     for i, event in enumerate(st.session_state.events):
         e_date = datetime.strptime(event['date'], "%Y-%m-%d")
-        display_date = e_date.strftime("%Y/%m/%d") # 年月日フォーマット
+        display_date = e_date.strftime("%Y/%m/%d")
         with cols[i]: st.metric(f"No.{event['id']}: {display_date} {event['name']}", f"{(e_date - datetime.now()).days} 日")
 
 st.divider()
