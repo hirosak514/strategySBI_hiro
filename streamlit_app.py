@@ -8,61 +8,43 @@ import json
 import re
 import os
 
-# --- 0. データの保存・読み込み ---
-DB_FILE = "portfolio.json"
-EVENT_FILE = "events.json"
-REMINDER_FILE = "reminder.json"
-CONFIG_FILE = "config.json"
+# --- 0. データの保存・読み込み (配布・クラウド対応) ---
+def init_session_state():
+    if 'portfolio' not in st.session_state:
+        st.session_state.portfolio = {}
+    if 'events' not in st.session_state:
+        st.session_state.events = []
+    if 'reminder_text' not in st.session_state:
+        st.session_state.reminder_text = "- ターゲット日程を入力してください"
+    if 'show_help' not in st.session_state:
+        st.session_state.show_help = False
+    if 'edit_mode' not in st.session_state:
+        st.session_state.edit_mode = False
 
-def load_json(file_path, default_value):
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            pass
-    return default_value
+init_session_state()
 
-def save_json(file_path, data):
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+# --- 1. API設定 ---
+api_key = st.session_state.get("custom_api_key", "")
+if not api_key:
+    # Streamlit CloudのSecrets対応
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY", "")
+    except:
+        api_key = ""
 
-# --- 1. セッション状態の初期化 ---
-if 'portfolio' not in st.session_state:
-    st.session_state.portfolio = load_json(DB_FILE, {})
-if 'events' not in st.session_state:
-    st.session_state.events = load_json(EVENT_FILE, [])
-if 'reminder_text' not in st.session_state:
-    st.session_state.reminder_text = load_json(REMINDER_FILE, "- ターゲット日程を入力してください")
-if 'api_key' not in st.session_state:
-    st.session_state.api_key = load_json(CONFIG_FILE, {"gemini_key": ""})["gemini_key"]
-if 'edit_mode' not in st.session_state:
-    st.session_state.edit_mode = False
-# 【追加】ヘルプ表示状態を管理するフラグ
-if 'show_help' not in st.session_state:
-    st.session_state.show_help = False
+if api_key:
+    genai.configure(api_key=api_key)
 
-# --- 2. API設定 ---
-if st.session_state.api_key:
-    genai.configure(api_key=st.session_state.api_key)
-
-# --- 3. 重要日程 ---
+# --- 2. 重要日程 ---
 DATE_ANNOUNCEMENT = datetime(2026, 5, 12)
 DATE_EXIT = datetime(2026, 5, 29)
 
-# --- 4. 解析・価格取得関数 (ロジック維持) ---
+# --- 3. 解析・価格取得関数 ---
 def analyze_multiple_images(uploaded_files):
-    if not st.session_state.api_key:
-        raise ValueError("APIキーが設定されていません。")
-    available_models = []
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-    except Exception as e:
-        raise ValueError(f"モデルリスト取得エラー: {e}")
-    target_model = next((m for m in available_models if "flash" in m), available_models[0])
-    model = genai.GenerativeModel(target_model)
+    if not api_key:
+        raise ValueError("APIキーが設定されていません。サイドバーから入力してください。")
+    
+    model = genai.GenerativeModel("gemini-1.5-flash")
     prompt = """
     証券口座の画像から、保有銘柄を抽出してください。
     【抽出ルール】
@@ -76,7 +58,7 @@ def analyze_multiple_images(uploaded_files):
     images = [Image.open(f) for f in uploaded_files]
     response = model.generate_content([prompt] + images)
     json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-    if not json_match: raise ValueError("AIが画像を正しく解析できませんでした。")
+    if not json_match: raise ValueError("AI解析に失敗しました。")
     return json.loads(json_match.group())
 
 def get_live_prices(portfolio_keys):
@@ -93,79 +75,90 @@ def get_live_prices(portfolio_keys):
     except: prices["USDJPY"] = 159.2
     return prices
 
-# --- 5. UI構築 ---
+# --- 4. UI構築 ---
 st.set_page_config(page_title="MSCI Exit Strategy Dashboard", layout="wide")
 
-# サイドバー: 各種設定
+# サイドバー: System Settings
 st.sidebar.header("🔑 System Settings")
-input_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
+input_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.get("custom_api_key", ""), type="password")
 
 col_api1, col_api2 = st.sidebar.columns(2)
-if col_api1.button("APIキーを保存", use_container_width=True):
-    st.session_state.api_key = input_key
-    save_json(CONFIG_FILE, {"gemini_key": input_key})
-    st.sidebar.success("Key saved!")
+if col_api1.button("APIキーを適用", use_container_width=True):
+    st.session_state.custom_api_key = input_key
     st.rerun()
 
-# 【改修点】ボタンを押すごとにTrue/Falseを切り替える
 if col_api2.button("APIキーとは", use_container_width=True):
     st.session_state.show_help = not st.session_state.show_help
     st.rerun()
 
-# show_helpがTrueのときだけ表示
 if st.session_state.show_help:
-    st.sidebar.info("""
-    **Gemini APIキーの取得方法**
-    1. [Google AI Studio](https://aistudio.google.com/app/apikey) にアクセス。
-    2. 'Create API key' をクリック。
-    3. 生成されたキーをコピーして、上の入力欄に貼り付けてください。
-    ※無料で利用可能です。
-    """)
+    st.sidebar.info("Google AI Studioで取得したAPIキーを入力すると、画像解析機能が有効になります。")
 
 st.sidebar.divider()
-st.sidebar.header("📸 Multi-Position Update")
-uploaded_files = st.sidebar.file_uploader("スクショをドラッグ＆ドロップ", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
-if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
+# サイドバー: 📸 Portfolio Update
+st.sidebar.header("📸 Portfolio Update")
+uploaded_files = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+if uploaded_files and st.sidebar.button("AI解析実行"):
     with st.sidebar.spinner("解析中..."):
         try:
-            aggregated_data = analyze_multiple_images(uploaded_files)
-            for key, vals in aggregated_data.items():
-                st.session_state.portfolio[key] = vals
-            save_json(DB_FILE, st.session_state.portfolio)
+            data = analyze_multiple_images(uploaded_files)
+            st.session_state.portfolio.update(data)
             st.rerun()
         except Exception as e: st.sidebar.error(f"解析エラー: {e}")
 
-# Event Manager / Reminder Editor (踏襲)
+# サイドバー: 📅 Event Manager (完全踏襲)
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 new_event_name = st.sidebar.text_input("イベント名を入力")
 new_event_date = st.sidebar.date_input("日付を選択", value=datetime.now())
-if st.sidebar.button("登録"):
+if st.sidebar.button("イベント登録"):
     if new_event_name:
-        st.session_state.events.append({"id": len(st.session_state.events)+1, "name": new_event_name, "date": new_event_date.strftime("%Y-%m-%d")})
-        save_json(EVENT_FILE, st.session_state.events)
+        st.session_state.events.append({
+            "id": len(st.session_state.events) + 1,
+            "name": new_event_name,
+            "date": new_event_date.strftime("%Y-%m-%d")
+        })
         st.rerun()
 
+if st.session_state.events:
+    del_id = st.sidebar.number_input("削除するNo", min_value=1, step=1)
+    if st.sidebar.button("選択したイベントを削除"):
+        st.session_state.events = [e for e in st.session_state.events if e['id'] != del_id]
+        for i, e in enumerate(st.session_state.events): e['id'] = i + 1
+        st.rerun()
+
+# サイドバー: 📝 Reminder Editor
 st.sidebar.divider()
 st.sidebar.header("📝 Reminder Editor")
 col_ir1, col_ir2 = st.sidebar.columns(2)
-if col_ir1.button("IR編集"): st.session_state.edit_mode = True; st.rerun()
-if col_ir2.button("登録", key="save_ir"):
-    save_json(REMINDER_FILE, st.session_state.reminder_text)
-    st.session_state.edit_mode = False; st.rerun()
+if col_ir1.button("編集"): st.session_state.edit_mode = True; st.rerun()
+if col_ir2.button("確定"): st.session_state.edit_mode = False; st.rerun()
 if st.session_state.edit_mode:
-    st.session_state.reminder_text = st.sidebar.text_area("内容を編集", value=st.session_state.reminder_text, height=200)
+    st.session_state.reminder_text = st.sidebar.text_area("内容を編集", value=st.session_state.reminder_text, height=150)
 
-# --- メイン表示 ---
+# --- 5. メイン画面表示 ---
 st.title("🚀 Strategist Dashboard: AI Scanner")
+
+# 固定イベント（MSCI日程）
 col_f1, col_f2 = st.columns(2)
 with col_f1: st.metric("MSCI発表まで", f"{(DATE_ANNOUNCEMENT - datetime.now()).days} 日")
 with col_f2: st.metric("出口戦略まで", f"{(DATE_EXIT - datetime.now()).days} 日")
 
-st.divider()
-st.header("📉 Real-time Portfolio Monitor")
+# 【修正点】登録済みイベントの表示エリアを復旧
+if st.session_state.events:
+    st.write("📌 **追加カスタムイベント**")
+    event_cols = st.columns(min(len(st.session_state.events), 4)) # 最大4列で表示
+    for i, event in enumerate(st.session_state.events):
+        e_date = datetime.strptime(event['date'], "%Y-%m-%d")
+        diff_days = (e_date - datetime.now()).days
+        with event_cols[i % 4]:
+            st.metric(f"No.{event['id']}: {event['name']}", f"{diff_days} 日")
 
+st.divider()
+
+# ポートフォリオ監視
+st.header("📉 Real-time Portfolio Monitor")
 current_prices = get_live_prices(st.session_state.portfolio.keys())
 rate = current_prices.get("USDJPY", 159.2)
 rows = []
@@ -194,9 +187,12 @@ with m_col3:
     st.write("##")
     if st.button('更新'): st.rerun()
 
-if rows: st.table(pd.DataFrame(rows))
-else: st.write("画像をアップロードしてください。")
+if rows:
+    st.table(pd.DataFrame(rows))
+    st.download_button("JSONで保存", data=json.dumps(st.session_state.portfolio, ensure_ascii=False), file_name="portfolio.json")
+else:
+    st.info("サイドバーからスクショをアップロードしてください。")
 
 st.divider()
-st.subheader("📋 1% Investor's Reminder")
+st.subheader("📋 Reminder")
 st.info(st.session_state.reminder_text)
