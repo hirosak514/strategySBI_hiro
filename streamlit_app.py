@@ -51,7 +51,7 @@ if st.session_state.api_key:
 DATE_ANNOUNCEMENT = datetime(2026, 5, 12)
 DATE_EXIT = datetime(2026, 5, 29)
 
-# --- 4. 解析関数（日本株コード抽出強化） ---
+# --- 4. 解析関数（銘柄名とコードを両方抽出） ---
 def analyze_multiple_images(uploaded_files):
     if not st.session_state.api_key:
         raise ValueError("APIキーが設定されていません。")
@@ -69,14 +69,22 @@ def analyze_multiple_images(uploaded_files):
     
     prompt = """
     証券口座の画像から、保有しているすべての銘柄を抽出してください。
-    【ルール】
-    1. 日本株(東証ETF含む)の場合：1655, 1497, 7013 などの4桁の銘柄コードを抽出し、キーにしてください。
-    2. 米国株の場合：MU, VRT, NEE などのティッカーをキーにしてください。
-    3. 信用取引の「売建」の場合は、銘柄コードの後に必ず "_SHORT" を付けてください（例: 7013_SHORT）。「買建」や「現物」はそのまま（例: 7013）でOKです。
-    4. 日本円で売買されているものは currency: "JPY"、米ドルのものは currency: "USD" としてください。
+    【抽出ルール】
+    1. 日本株(ETF含む)の場合：
+       - "code": 4桁の銘柄コード（例: 1655）
+       - "name": 銘柄名（例: iSSP500米国株）
+    2. 米国株の場合：
+       - "code": ティッカーシンボル（例: MU）
+       - "name": 企業名またはティッカー（例: Micron Technology）
+    3. 共通ルール：
+       - 信用取引の「売建」の場合は、codeの末尾に "_SHORT" を付与してください（例: 7013_SHORT）。
+       - 日本円決済なら currency: "JPY"、米ドル決済なら currency: "USD" としてください。
     
     必ず以下のJSON形式のみで回答してください：
-    {"銘柄コードまたはティッカー": {"shares": 数量, "cost": 取得単価, "currency": "JPY" or "USD"}}
+    {
+      "1655": {"name": "iSSP500米国株", "shares": 100, "cost": 2500, "currency": "JPY"},
+      "MU": {"name": "Micron", "shares": 10, "cost": 120, "currency": "USD"}
+    }
     """
     
     images = [Image.open(f) for f in uploaded_files]
@@ -90,12 +98,8 @@ def analyze_multiple_images(uploaded_files):
 
 def get_live_prices(portfolio_keys):
     prices = {}
-    for name in portfolio_keys:
-        # symbolの特定（SHORTなどの接尾辞を削除）
-        symbol = name.split('_')[0]
-        
-        # Yahoo Finance用のシンボル変換
-        # 4桁の数字、または IHI のような日本株名を東証コードに変換
+    for key in portfolio_keys:
+        symbol = key.split('_')[0]
         if symbol.isdigit() and len(symbol) == 4:
             ticker_symbol = f"{symbol}.T"
         elif symbol == "IHI":
@@ -106,9 +110,9 @@ def get_live_prices(portfolio_keys):
         try:
             stock = yf.Ticker(ticker_symbol)
             hist = stock.history(period="1d")
-            prices[name] = hist['Close'].iloc[-1] if not hist.empty else None
+            prices[key] = hist['Close'].iloc[-1] if not hist.empty else None
         except:
-            prices[name] = None
+            prices[key] = None
             
     try:
         prices["USDJPY"] = yf.Ticker("JPY=X").history(period="1d")['Close'].iloc[-1]
@@ -135,8 +139,8 @@ if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
     with st.sidebar.spinner("解析中..."):
         try:
             aggregated_data = analyze_multiple_images(uploaded_files)
-            for ticker, vals in aggregated_data.items():
-                st.session_state.portfolio[ticker] = vals
+            for key, vals in aggregated_data.items():
+                st.session_state.portfolio[key] = vals
             save_json(DB_FILE, st.session_state.portfolio)
             st.rerun()
         except Exception as e:
@@ -182,19 +186,19 @@ rows = []
 total_profit_jpy = 0
 total_profit_usd_only_us_stocks = 0
 
-for name, info in st.session_state.portfolio.items():
-    cur = current_prices.get(name)
+for key, info in st.session_state.portfolio.items():
+    cur = current_prices.get(key)
     if cur and info['shares'] > 0:
+        display_name = f"{key.split('_')[0]} {info.get('name', '')}" # コードと名前を結合
+        
         if info.get('currency') == "USD":
-            # 米国株計算
             p_usd = (cur - info['cost']) * info['shares']
             p_jpy = p_usd * rate
             total_profit_usd_only_us_stocks += p_usd
             total_profit_jpy += p_jpy
-            rows.append({"銘柄": name, "数量": info['shares'], "区分": "米国株", "取得単価": f"${info['cost']:,}", "現在値": f"${cur:,.2f}", "損益(円)": f"¥{p_jpy:,.0f}"})
+            rows.append({"銘柄": display_name, "数量": info['shares'], "区分": "米国株", "取得単価": f"${info['cost']:,}", "現在値": f"${cur:,.2f}", "損益(円)": f"¥{p_jpy:,.0f}"})
         else:
-            # 日本株・ETF計算 (SHORT判定含む)
-            if "_SHORT" in name:
+            if "_SHORT" in key:
                 p_jpy = (info['cost'] - cur) * info['shares']
                 label = "日本株(売建)"
             else:
@@ -202,7 +206,7 @@ for name, info in st.session_state.portfolio.items():
                 label = "日本株/ETF"
             
             total_profit_jpy += p_jpy
-            rows.append({"銘柄": name.replace("_SHORT",""), "数量": info['shares'], "区分": label, "取得単価": f"¥{info['cost']:,}", "現在値": f"¥{cur:,.0f}", "損益(円)": f"¥{p_jpy:,.0f}"})
+            rows.append({"銘柄": display_name, "数量": info['shares'], "区分": label, "取得単価": f"¥{info['cost']:,}", "現在値": f"¥{cur:,.0f}", "損益(円)": f"¥{p_jpy:,.0f}"})
 
 # 損益メトリクス表示
 m_col1, m_col2, m_col3 = st.columns([3, 2, 5])
