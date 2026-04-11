@@ -54,12 +54,23 @@ if current_api_key:
 DATE_ANNOUNCEMENT = datetime(2026, 5, 12)
 DATE_EXIT = datetime(2026, 5, 29)
 
-# --- 4. 解析・価格取得関数 ---
+# --- 4. 解析・価格取得関数 (1つ前のロジックを完全踏襲) ---
 def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。")
     
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    # 【完全踏襲】利用可能なモデルをリストアップしてFlashを選択するロジック
+    available_models = []
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+    except Exception as e:
+        raise ValueError(f"モデルリスト取得エラー: {e}")
+
+    # "flash"が含まれるモデルを優先的に選択
+    target_model = next((m for m in available_models if "flash" in m), available_models[0])
+    model = genai.GenerativeModel(target_model)
     
     prompt = """
     証券口座の画像から、保有しているすべての銘柄を抽出してください。
@@ -72,7 +83,7 @@ def analyze_multiple_images(uploaded_files):
     3. 日本株は currency: "JPY"、米国株は currency: "USD" としてください。
     
     必ず以下のJSON形式のみで回答してください：
-    {"キー": {"name": "銘柄名", "shares": 合計数量, "cost": 平均単価, "currency": "JPY" or "USD"}}
+    {"キー": {"name": "銘柄名", "shares": 数量, "cost": 取得単価, "currency": "JPY" or "USD"}}
     """
     
     images = [Image.open(f) for f in uploaded_files]
@@ -85,7 +96,6 @@ def analyze_multiple_images(uploaded_files):
 def get_live_prices(portfolio_keys):
     prices = {}
     for key in portfolio_keys:
-        # 接尾辞を除去してコードのみにする
         symbol = key.replace("_MARGIN_LONG", "").replace("_SHORT", "")
         ticker_symbol = f"{symbol}.T" if symbol.isdigit() and len(symbol) == 4 else ( "7013.T" if symbol == "IHI" else symbol )
         try:
@@ -104,7 +114,7 @@ def get_live_prices(portfolio_keys):
 # --- 5. UI構築 ---
 st.set_page_config(page_title="MSCI Exit Strategy Dashboard", layout="wide")
 
-# サイドバー設定 (完全踏襲)
+# サイドバー設定
 st.sidebar.header("🔑 System Settings")
 input_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
 col_api1, col_api2 = st.sidebar.columns(2)
@@ -124,16 +134,16 @@ st.sidebar.header("📸 Multi-Position Update")
 uploaded_files = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
 if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
-    with st.sidebar.spinner("集計中..."):
+    with st.sidebar.spinner("解析中..."):
         try:
             new_data = analyze_multiple_images(uploaded_files)
-            # 既存のポートフォリオを一旦クリアして新しい解析結果を反映（重複防止）
+            # 重複を防ぐため解析結果を反映
             st.session_state.portfolio = new_data
             save_json(DB_FILE, st.session_state.portfolio)
             st.rerun()
         except Exception as e: st.sidebar.error(f"解析エラー: {e}")
 
-# イベント・リマインダー管理 (完全踏襲)
+# イベント・リマインダー管理
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 new_event_name = st.sidebar.text_input("イベント名を入力")
@@ -147,6 +157,7 @@ if st.session_state.events:
     del_id = st.sidebar.number_input("削除No", min_value=1, step=1)
     if st.sidebar.button("削除"):
         st.session_state.events = [e for e in st.session_state.events if e['id'] != del_id]
+        for i, e in enumerate(st.session_state.events): e['id'] = i + 1
         save_json(EVENT_FILE, st.session_state.events)
         st.rerun()
 
@@ -217,7 +228,7 @@ with m_col3:
     if st.button('更新'): st.rerun()
 
 if rows: st.table(pd.DataFrame(rows))
-else: st.info("画像をアップロードしてください。")
+else: st.info("画像（SBI証券の保有残高など）をアップロードしてください。")
 
 st.divider()
 st.subheader("📋 1% Investor's Reminder")
