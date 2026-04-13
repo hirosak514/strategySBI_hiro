@@ -10,29 +10,41 @@ import io
 from streamlit.components.v1 import html
 
 # --- 1. ブラウザ自動保存・復元 (JavaScript) ---
-def save_to_browser(key, data):
+def trigger_auto_save():
+    """現在のSessionStateをブラウザのlocalStorageにサイレント保存"""
+    save_data = {
+        "portfolio": st.session_state.portfolio,
+        "events": st.session_state.events,
+        "reminder_text": st.session_state.reminder_text,
+        "api_key": st.session_state.api_key
+    }
     js_code = f"""
     <script>
-    localStorage.setItem('{key}', JSON.stringify({json.dumps(data, ensure_ascii=False)}));
+    localStorage.setItem('strategist_data', JSON.stringify({json.dumps(save_data, ensure_ascii=False)}));
+    console.log("Auto-saved to browser storage.");
     </script>
     """
     html(js_code, height=0)
 
-def load_from_browser():
+def load_from_browser_js():
+    """起動時にlocalStorageからデータを取得しURL経由でStreamlitに渡す"""
     js_code = """
     <script>
     const data = localStorage.getItem('strategist_data');
     if (data) {
         const url = new URL(window.location);
         if (!url.searchParams.get('loaded')) {
-            window.parent.postMessage({type: 'streamlit:set_query_params', query_params: {data: data, loaded: 'true'}}, '*');
+            window.parent.postMessage({
+                type: 'streamlit:set_query_params', 
+                query_params: {data: data, loaded: 'true'}
+            }, '*');
         }
     }
     </script>
     """
     html(js_code, height=0)
 
-# --- 2. データのエクスポート・インポート (手動ファイル操作) ---
+# --- 2. データのエクスポート・インポート (手動バックアップ) ---
 def export_data():
     data = {
         "portfolio": st.session_state.portfolio,
@@ -54,7 +66,8 @@ def import_data(uploaded_json):
         except: return False
     return False
 
-# --- 3. セッション状態の初期化と自動復元 ---
+# --- 3. セッション状態の初期化と自動復元実行 ---
+# URLパラメータ（JSが仕込んだデータ）があれば最優先で復元
 query_params = st.query_params
 if "data" in query_params and 'portfolio' not in st.session_state:
     try:
@@ -65,14 +78,14 @@ if "data" in query_params and 'portfolio' not in st.session_state:
         st.session_state.api_key = saved_data.get("api_key", "")
     except: pass
 
+# デフォルト値の設定
 if 'portfolio' not in st.session_state: st.session_state.portfolio = {}
 if 'events' not in st.session_state: st.session_state.events = []
 if 'reminder_text' not in st.session_state: st.session_state.reminder_text = "- ターゲット日程を入力してください"
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
 if 'edit_mode' not in st.session_state: st.session_state.edit_mode = False
-if 'show_help' not in st.session_state: st.session_state.show_help = False
 
-# --- 4. 解析・価格取得 (ロジック完全踏襲) ---
+# --- 4. 解析・価格取得ロジック ---
 def analyze_images(files):
     if not st.session_state.api_key: raise ValueError("APIキーが必要です")
     genai.configure(api_key=st.session_state.api_key)
@@ -103,44 +116,39 @@ def get_prices(keys):
 
 # --- 5. UI構築 ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
-load_from_browser()
+load_from_browser_js() # 起動時にブラウザからデータを拾う
 
 # サイドバー
-st.sidebar.header("🔑 System & Data Management")
+st.sidebar.header("🔑 System & Backup")
 # APIキー設定
-input_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
-if st.sidebar.button("APIキーを適用", use_container_width=True):
-    st.session_state.api_key = input_key
-    st.rerun()
+old_key = st.session_state.api_key
+st.session_state.api_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
+if st.session_state.api_key != old_key:
+    trigger_auto_save() # 変更されたら即保存
 
-# ★【自動保存ボタン】
-if st.sidebar.button("✨ 現在の設定をブラウザに自動保存", use_container_width=True):
-    save_data = {"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text, "api_key": st.session_state.api_key}
-    save_to_browser('strategist_data', save_data)
-    st.sidebar.success("ブラウザに保存完了！次回から自動読込されます。")
-
-st.sidebar.divider()
-
-# ★【手動バックアップ・復元：完全踏襲】
+# 手動バックアップ機能
 st.sidebar.subheader("💾 手動ファイル保存・読込")
 st.sidebar.download_button(label="現在の全データをファイルに保存", data=export_data(), file_name="strategy_dashboard_backup.json", mime="application/json", use_container_width=True)
 uploaded_json = st.sidebar.file_uploader("保存ファイルを読み込む", type="json")
 if uploaded_json and st.sidebar.button("データを復元する", use_container_width=True):
-    if import_data(uploaded_json): st.rerun()
+    if import_data(uploaded_json):
+        trigger_auto_save() # 復元後も即保存
+        st.rerun()
 
 st.sidebar.divider()
 
-# 画像解析 (完全踏襲)
+# 画像解析
 st.sidebar.header("📸 Multi-Position Update")
 up_imgs = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg"], accept_multiple_files=True)
 if up_imgs and st.sidebar.button("AIで全画像を解析・集計"):
     with st.sidebar.spinner("解析中..."):
         try:
             st.session_state.portfolio = analyze_images(up_imgs)
+            trigger_auto_save() # 解析完了後に即保存
             st.rerun()
         except Exception as e: st.sidebar.error(f"解析エラー: {e}")
 
-# イベント管理 (完全踏襲)
+# イベント管理
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 new_e_name = st.sidebar.text_input("イベント名を入力")
@@ -148,27 +156,32 @@ new_e_date = st.sidebar.date_input("日付を選択", value=datetime.now())
 if st.sidebar.button("登録"):
     if new_e_name:
         st.session_state.events.append({"id": len(st.session_state.events)+1, "name": new_e_name, "date": new_e_date.strftime("%Y-%m-%d")})
+        trigger_auto_save() # 登録後に即保存
         st.rerun()
 if st.session_state.events:
     del_id = st.sidebar.number_input("削除No", min_value=1, step=1)
     if st.sidebar.button("削除"):
         st.session_state.events = [e for e in st.session_state.events if e['id'] != del_id]
         for i, e in enumerate(st.session_state.events): e['id'] = i + 1
+        trigger_auto_save() # 削除後に即保存
         st.rerun()
 
 st.sidebar.divider()
-# リマインダー編集 (完全踏襲)
+# リマインダー編集
 st.sidebar.header("📝 Reminder Editor")
 col_e1, col_e2 = st.sidebar.columns(2)
 if col_e1.button("IR編集"): st.session_state.edit_mode = True; st.rerun()
-if col_e2.button("登録", key="save_ir"): st.session_state.edit_mode = False; st.rerun()
+if col_e2.button("登録", key="save_ir"): 
+    st.session_state.edit_mode = False
+    trigger_auto_save() # 編集完了後に即保存
+    st.rerun()
 if st.session_state.edit_mode:
     st.session_state.reminder_text = st.sidebar.text_area("内容を編集", value=st.session_state.reminder_text, height=200)
 
 # --- メイン表示 ---
-st.title("🚀 Strategist Dashboard: AI Scanner")
+st.title("🚀 Strategist Dashboard")
 
-# イベント表示 (完全踏襲)
+# イベント表示
 if st.session_state.events:
     st.write("📌 **追加イベント**")
     cols = st.columns(len(st.session_state.events))
@@ -189,7 +202,6 @@ for key, info in st.session_state.portfolio.items():
         raw_code = key.split('_')[0]
         display_name = f"{raw_code} {info.get('name', '')}"
         
-        # 区分・損益計算 (完全踏襲)
         if "_SHORT" in key: label, p_jpy = "信用(売建)", (info['cost'] - cur) * info['shares']
         elif "_MARGIN_LONG" in key: label, p_jpy = "信用(買建)", (cur - info['cost']) * info['shares']
         else:
