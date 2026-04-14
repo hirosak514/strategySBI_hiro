@@ -48,7 +48,6 @@ def load_from_browser_js():
 # --- 2. データの初期化と自動復元ロジック ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
-# URLパラメータからデータを復元
 query_params = st.query_params
 if "data" in query_params and 'initialized' not in st.session_state:
     try:
@@ -60,14 +59,12 @@ if "data" in query_params and 'initialized' not in st.session_state:
         st.session_state.initialized = True
     except: pass
 
-# デフォルト値の設定
 if 'portfolio' not in st.session_state: st.session_state.portfolio = {}
 if 'events' not in st.session_state: st.session_state.events = []
 if 'reminder_text' not in st.session_state: st.session_state.reminder_text = "- ターゲット日程を入力してください"
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
 if 'edit_mode' not in st.session_state: st.session_state.edit_mode = False
 
-# 起動時にJSを実行してデータを拾いに行く
 load_from_browser_js()
 
 # --- 3. AI解析関数 (404エラー対策・軽量化版) ---
@@ -78,17 +75,15 @@ def analyze_images(files):
     
     try:
         genai.configure(api_key=st.session_state.api_key)
-        # 修正ポイント: プレフィックスを付けてモデルを明示指定
-     
-        
-        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+        # 【修正ポイント】モデル名をプレフィックス付きで明示指定
+        model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
         
         prompt = "証券口座の画像から保有銘柄を抽出してJSONで回答してください。キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。通貨=JPY/USD。"
         
         processed_images = []
         for f in files:
             img = Image.open(f)
-            # 安定性のための軽量化
+            # 安定性のための軽量化（1600pxに縮小）
             img.thumbnail((1600, 1600))
             if img.mode != 'RGB':
                 img = img.convert('RGB')
@@ -104,12 +99,13 @@ def analyze_images(files):
             st.error("AIの回答を解析できませんでした。")
             return {}
     except Exception as e:
+        # エラー詳細を表示
         st.error(f"AI解析エラー: {str(e)}")
         return {}
 
 # --- 4. 市場データ取得 (yfinance) ---
 def get_prices(keys):
-    prices = {"USDJPY": 159.07} # デフォルト
+    prices = {"USDJPY": 159.07}
     try: prices["USDJPY"] = yf.Ticker("JPY=X").history(period="1d")['Close'].iloc[-1]
     except: pass
     for k in keys:
@@ -124,14 +120,12 @@ def get_prices(keys):
 # --- 5. メインUI ---
 st.title("🚀 Strategist Dashboard")
 
-# サイドバー
 st.sidebar.header("🔑 System & Data")
 new_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
 if new_key != st.session_state.api_key:
     st.session_state.api_key = new_key
     trigger_auto_save()
 
-# バックアップ機能
 st.sidebar.divider()
 st.sidebar.subheader("💾 手動ファイル保存・読込")
 export_json = json.dumps({"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text, "api_key": st.session_state.api_key}, ensure_ascii=False, indent=4)
@@ -149,7 +143,6 @@ if up_file and st.sidebar.button("データを復元", use_container_width=True)
         st.rerun()
     except: st.sidebar.error("形式が正しくありません")
 
-# 画像解析
 st.sidebar.divider()
 st.sidebar.header("📸 Multi-Position Update")
 up_imgs = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
@@ -161,7 +154,6 @@ if up_imgs and st.sidebar.button("AIで解析実行"):
             trigger_auto_save()
             st.rerun()
 
-# イベント管理
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 e_n = st.sidebar.text_input("イベント名")
@@ -172,7 +164,6 @@ if st.sidebar.button("登録"):
         trigger_auto_save()
         st.rerun()
 
-# --- メインコンテンツ表示 ---
 if st.session_state.events:
     st.write("📌 **今後の予定**")
     cols = st.columns(len(st.session_state.events))
@@ -182,7 +173,6 @@ if st.session_state.events:
 
 st.divider()
 
-# ポートフォリオ表示
 st.header("📉 Real-time Portfolio Monitor")
 prices = get_prices(st.session_state.portfolio.keys())
 rate = prices.get("USDJPY", 159.07)
