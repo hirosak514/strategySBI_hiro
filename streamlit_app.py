@@ -10,7 +10,6 @@ import io
 from streamlit.components.v1 import html
 
 # --- 1. ブラウザストレージ操作 (JavaScriptによる自動保存・復元) ---
-# strategist_storage_v3として保存し、古いバージョンとの衝突を避けます
 def trigger_auto_save():
     """現在の全データをlocalStorageにサイレント保存"""
     save_data = {
@@ -22,7 +21,7 @@ def trigger_auto_save():
     js_code = f"""
     <script>
     const data = {json.dumps(save_data, ensure_ascii=False)};
-    localStorage.setItem('strategist_storage_v3', JSON.stringify(data));
+    localStorage.setItem('strategist_storage_v4', JSON.stringify(data));
     console.log("Strategist: Auto-saved successfully.");
     </script>
     """
@@ -32,7 +31,7 @@ def load_from_browser_js():
     """起動時にlocalStorageからデータを取得し、Streamlitに渡す"""
     js_code = """
     <script>
-    const savedData = localStorage.getItem('strategist_storage_v3');
+    const savedData = localStorage.getItem('strategist_storage_v4');
     if (savedData) {
         const url = new URL(window.location);
         if (!url.searchParams.get('init')) {
@@ -49,7 +48,7 @@ def load_from_browser_js():
 # --- 2. データの初期化と自動復元ロジック ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
-# URLパラメータからデータを復元（起動時のみ）
+# URLパラメータからデータを復元
 query_params = st.query_params
 if "data" in query_params and 'initialized' not in st.session_state:
     try:
@@ -71,51 +70,42 @@ if 'edit_mode' not in st.session_state: st.session_state.edit_mode = False
 # 起動時にJSを実行してデータを拾いに行く
 load_from_browser_js()
 
-# --- 3. AI解析関数 (軽量化・エラー防止版) ---
+# --- 3. AI解析関数 (404エラー対策・軽量化版) ---
 def analyze_images(files):
     if not st.session_state.api_key: 
         st.error("APIキーを入力してください")
         return {}
     
-    genai.configure(api_key=st.session_state.api_key)
-    
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
-    
-    # プロンプトの維持と最適化
-    prompt = """
-    証券口座の画像から保有銘柄を抽出してJSONで回答してください。
-    キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。通貨=JPY/USD。
-    数量(shares)、取得単価(cost)、通貨(currency)、銘柄名(name)を含めてください。
-    """
-    
-    processed_images = []
-    for f in files:
-        try:
+    try:
+        genai.configure(api_key=st.session_state.api_key)
+        # 修正ポイント: プレフィックスを付けてモデルを明示指定
+        model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
+        
+        prompt = "証券口座の画像から保有銘柄を抽出してJSONで回答してください。キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。通貨=JPY/USD。"
+        
+        processed_images = []
+        for f in files:
             img = Image.open(f)
-            # 解析エラーを防ぐための軽量化処理
+            # 安定性のための軽量化
             img.thumbnail((1600, 1600))
             if img.mode != 'RGB':
                 img = img.convert('RGB')
             processed_images.append(img)
-        except Exception as e:
-            st.error(f"画像読み込みエラー: {str(e)}")
-            continue
 
-    if not processed_images: return {}
+        if not processed_images: return {}
 
-    try:
         response = model.generate_content([prompt] + processed_images)
         json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())
         else:
-            st.error("AIの回答からデータを抽出できませんでした。")
+            st.error("AIの回答を解析できませんでした。")
             return {}
     except Exception as e:
-        st.error(f"AI解析エラー (通信または容量制限): {str(e)}")
+        st.error(f"AI解析エラー: {str(e)}")
         return {}
 
-# --- 4. 共通ロジック (yfinance) ---
+# --- 4. 市場データ取得 (yfinance) ---
 def get_prices(keys):
     prices = {"USDJPY": 159.07} # デフォルト
     try: prices["USDJPY"] = yf.Ticker("JPY=X").history(period="1d")['Close'].iloc[-1]
@@ -139,7 +129,7 @@ if new_key != st.session_state.api_key:
     st.session_state.api_key = new_key
     trigger_auto_save()
 
-# 手動ファイル保存/読込 (バックアップ機能維持)
+# バックアップ機能
 st.sidebar.divider()
 st.sidebar.subheader("💾 手動ファイル保存・読込")
 export_json = json.dumps({"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text, "api_key": st.session_state.api_key}, ensure_ascii=False, indent=4)
@@ -157,7 +147,7 @@ if up_file and st.sidebar.button("データを復元", use_container_width=True)
         st.rerun()
     except: st.sidebar.error("形式が正しくありません")
 
-# 画像解析 (機能維持＋安定化)
+# 画像解析
 st.sidebar.divider()
 st.sidebar.header("📸 Multi-Position Update")
 up_imgs = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
@@ -169,7 +159,7 @@ if up_imgs and st.sidebar.button("AIで解析実行"):
             trigger_auto_save()
             st.rerun()
 
-# イベント管理 (機能維持)
+# イベント管理
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 e_n = st.sidebar.text_input("イベント名")
@@ -181,18 +171,16 @@ if st.sidebar.button("登録"):
         st.rerun()
 
 # --- メインコンテンツ表示 ---
-# イベントカウントダウン表示
 if st.session_state.events:
     st.write("📌 **今後の予定**")
     cols = st.columns(len(st.session_state.events))
     for i, ev in enumerate(st.session_state.events):
         d = datetime.strptime(ev['date'], "%Y-%m-%d")
-        days_left = (d - datetime.now()).days
-        with cols[i]: st.metric(f"{ev['name']}", f"{days_left} 日")
+        with cols[i]: st.metric(f"{ev['name']}", f"{(d - datetime.now()).days} 日")
 
 st.divider()
 
-# ポートフォリオ表示 (計算ロジック完全維持)
+# ポートフォリオ表示
 st.header("📉 Real-time Portfolio Monitor")
 prices = get_prices(st.session_state.portfolio.keys())
 rate = prices.get("USDJPY", 159.07)
@@ -211,31 +199,19 @@ for k, info in st.session_state.portfolio.items():
             else: p_jpy = (cur-info['cost'])*info['shares']
         
         total_jpy += p_jpy
-        rows.append({
-            "銘柄": f"{k.split('_')[0]} {info.get('name','')}", 
-            "区分": label, 
-            "数量": info['shares'], 
-            "取得単価": f"${info['cost']:,}" if info['currency']=="USD" else f"¥{info['cost']:,}", 
-            "現在値": f"${cur:,.2f}" if info['currency']=="USD" else f"¥{cur:,.0f}", 
-            "損益(円)": f"¥{p_jpy:,.0f}"
-        })
+        rows.append({"銘柄": f"{k.split('_')[0]} {info.get('name','')}", "区分": label, "数量": info['shares'], "取得単価": f"${info['cost']:,}" if info['currency']=="USD" else f"¥{info['cost']:,}", "現在値": f"${cur:,.2f}" if info['currency']=="USD" else f"¥{cur:,.0f}", "損益(円)": f"¥{p_jpy:,.0f}"})
 
 c1, c2, c3 = st.columns([3, 2, 5])
 c1.metric("総計損益 (JPY)", f"¥{total_jpy:,.0f}", delta=f"USD/JPY: {rate:.2f}")
 c2.metric("米国株損益 (USD)", f"${total_usd:,.2f}")
 if c3.button("🔄 更新"): st.rerun()
-
-if rows: 
-    st.table(pd.DataFrame(rows))
-else:
-    st.info("ポートフォリオが空です。サイドバーから画像をアップロードしてください。")
+if rows: st.table(pd.DataFrame(rows))
+else: st.info("ポートフォリオが空です。")
 
 st.divider()
-# リマインダー機能 (機能維持)
 st.subheader("📋 1% Investor's Reminder")
 col_r1, col_r2 = st.columns([8, 2])
 if col_r2.button("編集"): st.session_state.edit_mode = not st.session_state.edit_mode
-
 if st.session_state.edit_mode:
     st.session_state.reminder_text = st.text_area("内容を編集", value=st.session_state.reminder_text, height=150)
     if st.button("リマインダーを保存"):
