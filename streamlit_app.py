@@ -80,7 +80,8 @@ def analyze_images(files):
         genai.configure(api_key=st.session_state.api_key)
         # 修正ポイント: プレフィックスを付けてモデルを明示指定
      
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
         
         prompt = "証券口座の画像から保有銘柄を抽出してJSONで回答してください。キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。通貨=JPY/USD。"
         
