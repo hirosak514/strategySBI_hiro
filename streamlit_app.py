@@ -75,7 +75,7 @@ def analyze_images(files):
     
     try:
         genai.configure(api_key=st.session_state.api_key)
-        # 【修正ポイント】モデル名をプレフィックス付きで明示指定
+        # 【修正箇所】SDKのバージョンに依存せず動作する明示的なモデル指定
         model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
         
         prompt = "証券口座の画像から保有銘柄を抽出してJSONで回答してください。キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。通貨=JPY/USD。"
@@ -83,7 +83,7 @@ def analyze_images(files):
         processed_images = []
         for f in files:
             img = Image.open(f)
-            # 安定性のための軽量化（1600pxに縮小）
+            # 安定性のための軽量化（リサイズ）
             img.thumbnail((1600, 1600))
             if img.mode != 'RGB':
                 img = img.convert('RGB')
@@ -99,7 +99,7 @@ def analyze_images(files):
             st.error("AIの回答を解析できませんでした。")
             return {}
     except Exception as e:
-        # エラー詳細を表示
+        # エラー内容を詳細に表示
         st.error(f"AI解析エラー: {str(e)}")
         return {}
 
