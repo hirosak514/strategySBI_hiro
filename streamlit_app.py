@@ -21,7 +21,7 @@ def trigger_auto_save():
     js_code = f"""
     <script>
     const data = {json.dumps(save_data, ensure_ascii=False)};
-    localStorage.setItem('strategist_storage_v4', JSON.stringify(data));
+    localStorage.setItem('strategist_storage_v5', JSON.stringify(data));
     console.log("Strategist: Auto-saved successfully.");
     </script>
     """
@@ -31,7 +31,7 @@ def load_from_browser_js():
     """起動時にlocalStorageからデータを取得し、Streamlitに渡す"""
     js_code = """
     <script>
-    const savedData = localStorage.getItem('strategist_storage_v4');
+    const savedData = localStorage.getItem('strategist_storage_v5');
     if (savedData) {
         const url = new URL(window.location);
         if (!url.searchParams.get('init')) {
@@ -67,7 +67,7 @@ if 'edit_mode' not in st.session_state: st.session_state.edit_mode = False
 
 load_from_browser_js()
 
-# --- 3. AI解析関数 (404エラー徹底対策版) ---
+# --- 3. AI解析関数 (エラー徹底回避版) ---
 def analyze_images(files):
     if not st.session_state.api_key: 
         st.error("APIキーを入力してください")
@@ -76,15 +76,15 @@ def analyze_images(files):
     try:
         genai.configure(api_key=st.session_state.api_key)
         
-        # 【重要】404エラーを回避するためのフルパス指定
-        model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
+        # エラー回避策：複数の命名パターンを試行、またはバージョン依存を避ける
+        # 多くの環境で最も安定する「モデル名のみ」の指定
+        model = genai.GenerativeModel("gemini-1.5-flash")
         
         prompt = "証券口座の画像から保有銘柄を抽出してJSONで回答してください。キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。通貨=JPY/USD。"
         
         processed_images = []
         for f in files:
             img = Image.open(f)
-            # 安定性のための軽量化
             img.thumbnail((1600, 1600))
             if img.mode != 'RGB':
                 img = img.convert('RGB')
@@ -92,7 +92,6 @@ def analyze_images(files):
 
         if not processed_images: return {}
 
-        # AIへリクエスト送信
         response = model.generate_content([prompt] + processed_images)
         
         # JSON部分の抽出
@@ -104,7 +103,15 @@ def analyze_images(files):
             return {}
             
     except Exception as e:
-        # 詳細なエラーメッセージを表示
+        # エラーが出た場合、別のモデル名（フルパス）で再試行する
+        if "404" in str(e):
+            try:
+                model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
+                response = model.generate_content([prompt] + processed_images)
+                json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                if json_match: return json.loads(json_match.group())
+            except: pass
+        
         st.error(f"AI解析エラー: {str(e)}")
         return {}
 
@@ -125,7 +132,6 @@ def get_prices(keys):
 # --- 5. メインUI ---
 st.title("🚀 Strategist Dashboard")
 
-# サイドバー設定
 st.sidebar.header("🔑 System & Data")
 new_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
 if new_key != st.session_state.api_key:
@@ -133,11 +139,11 @@ if new_key != st.session_state.api_key:
     trigger_auto_save()
 
 st.sidebar.divider()
-st.sidebar.subheader("💾 手動ファイル保存・読込")
+st.sidebar.subheader("💾 保存・復元")
 export_json = json.dumps({"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text, "api_key": st.session_state.api_key}, ensure_ascii=False, indent=4)
-st.sidebar.download_button("設定をファイルに保存", data=export_json, file_name="strategy_backup.json", mime="application/json", use_container_width=True)
+st.sidebar.download_button("設定を保存", data=export_json, file_name="strategy_backup.json", mime="application/json", use_container_width=True)
 
-up_file = st.sidebar.file_uploader("保存ファイルを読み込む", type="json")
+up_file = st.sidebar.file_uploader("ファイルを読み込む", type="json")
 if up_file and st.sidebar.button("データを復元", use_container_width=True):
     try:
         data = json.load(up_file)
@@ -149,7 +155,6 @@ if up_file and st.sidebar.button("データを復元", use_container_width=True)
         st.rerun()
     except: st.sidebar.error("形式が正しくありません")
 
-# 画像解析UI
 st.sidebar.divider()
 st.sidebar.header("📸 Multi-Position Update")
 up_imgs = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
@@ -161,7 +166,6 @@ if up_imgs and st.sidebar.button("AIで解析実行"):
             trigger_auto_save()
             st.rerun()
 
-# イベント管理UI
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 e_n = st.sidebar.text_input("イベント名")
@@ -172,7 +176,6 @@ if st.sidebar.button("登録"):
         trigger_auto_save()
         st.rerun()
 
-# メインコンテンツ表示
 if st.session_state.events:
     st.write("📌 **今後の予定**")
     cols = st.columns(len(st.session_state.events))
@@ -182,7 +185,6 @@ if st.session_state.events:
 
 st.divider()
 
-# ポートフォリオ表示
 st.header("📉 Real-time Portfolio Monitor")
 prices = get_prices(st.session_state.portfolio.keys())
 rate = prices.get("USDJPY", 159.07)
@@ -211,7 +213,6 @@ if rows: st.table(pd.DataFrame(rows))
 else: st.info("ポートフォリオが空です。")
 
 st.divider()
-# リマインダー機能
 st.subheader("📋 1% Investor's Reminder")
 col_r1, col_r2 = st.columns([8, 2])
 if col_r2.button("編集"): st.session_state.edit_mode = not st.session_state.edit_mode
