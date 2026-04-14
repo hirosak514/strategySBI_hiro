@@ -78,7 +78,8 @@ def analyze_images(files):
         return {}
     
     genai.configure(api_key=st.session_state.api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    
+    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
     
     # プロンプトの維持と最適化
     prompt = """
