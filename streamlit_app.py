@@ -67,7 +67,7 @@ if 'edit_mode' not in st.session_state: st.session_state.edit_mode = False
 
 load_from_browser_js()
 
-# --- 3. AI解析関数 (404エラー対策・軽量化版) ---
+# --- 3. AI解析関数 (404エラー徹底対策版) ---
 def analyze_images(files):
     if not st.session_state.api_key: 
         st.error("APIキーを入力してください")
@@ -75,7 +75,8 @@ def analyze_images(files):
     
     try:
         genai.configure(api_key=st.session_state.api_key)
-        # 【修正箇所】SDKのバージョンに依存せず動作する明示的なモデル指定
+        
+        # 【重要】404エラーを回避するためのフルパス指定
         model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
         
         prompt = "証券口座の画像から保有銘柄を抽出してJSONで回答してください。キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。通貨=JPY/USD。"
@@ -83,7 +84,7 @@ def analyze_images(files):
         processed_images = []
         for f in files:
             img = Image.open(f)
-            # 安定性のための軽量化（リサイズ）
+            # 安定性のための軽量化
             img.thumbnail((1600, 1600))
             if img.mode != 'RGB':
                 img = img.convert('RGB')
@@ -91,15 +92,19 @@ def analyze_images(files):
 
         if not processed_images: return {}
 
+        # AIへリクエスト送信
         response = model.generate_content([prompt] + processed_images)
+        
+        # JSON部分の抽出
         json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())
         else:
             st.error("AIの回答を解析できませんでした。")
             return {}
+            
     except Exception as e:
-        # エラー内容を詳細に表示
+        # 詳細なエラーメッセージを表示
         st.error(f"AI解析エラー: {str(e)}")
         return {}
 
@@ -120,6 +125,7 @@ def get_prices(keys):
 # --- 5. メインUI ---
 st.title("🚀 Strategist Dashboard")
 
+# サイドバー設定
 st.sidebar.header("🔑 System & Data")
 new_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
 if new_key != st.session_state.api_key:
@@ -143,6 +149,7 @@ if up_file and st.sidebar.button("データを復元", use_container_width=True)
         st.rerun()
     except: st.sidebar.error("形式が正しくありません")
 
+# 画像解析UI
 st.sidebar.divider()
 st.sidebar.header("📸 Multi-Position Update")
 up_imgs = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
@@ -154,6 +161,7 @@ if up_imgs and st.sidebar.button("AIで解析実行"):
             trigger_auto_save()
             st.rerun()
 
+# イベント管理UI
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 e_n = st.sidebar.text_input("イベント名")
@@ -164,6 +172,7 @@ if st.sidebar.button("登録"):
         trigger_auto_save()
         st.rerun()
 
+# メインコンテンツ表示
 if st.session_state.events:
     st.write("📌 **今後の予定**")
     cols = st.columns(len(st.session_state.events))
@@ -173,6 +182,7 @@ if st.session_state.events:
 
 st.divider()
 
+# ポートフォリオ表示
 st.header("📉 Real-time Portfolio Monitor")
 prices = get_prices(st.session_state.portfolio.keys())
 rate = prices.get("USDJPY", 159.07)
@@ -201,6 +211,7 @@ if rows: st.table(pd.DataFrame(rows))
 else: st.info("ポートフォリオが空です。")
 
 st.divider()
+# リマインダー機能
 st.subheader("📋 1% Investor's Reminder")
 col_r1, col_r2 = st.columns([8, 2])
 if col_r2.button("編集"): st.session_state.edit_mode = not st.session_state.edit_mode
