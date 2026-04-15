@@ -71,9 +71,9 @@ def analyze_multiple_images(uploaded_files):
     【集計ルール】
     1. 銘柄名と種別（現物、信用買、信用売）が同じものは、数量を合計し、取得単価を平均（加重平均）してください。
     2. キーの付け方：
-       - 現物：銘柄コード（例: 7013）
-       - 信用買：コード + "_MARGIN_LONG"（例: 7013_MARGIN_LONG）
-       - 信用売：コード + "_SHORT"（例: 7013_SHORT）
+        - 現物：銘柄コード（例: 7013）
+        - 信用買：コード + "_MARGIN_LONG"（例: 7013_MARGIN_LONG）
+        - 信用売：コード + "_SHORT"（例: 7013_SHORT）
     3. 日本株は currency: "JPY"、米国株は currency: "USD" としてください。
     
     必ず以下のJSON形式のみで回答してください：
@@ -121,6 +121,46 @@ if col_api1.button("APIキーを保存", use_container_width=True):
 if col_api2.button("APIキーとは", use_container_width=True):
     st.session_state.show_help = not st.session_state.show_help
     st.rerun()
+
+# 【追加改修】設定ファイル（JSON）の保存と読み込み
+st.sidebar.divider()
+st.sidebar.subheader("💾 Data Backup")
+
+# エクスポート用データの作成
+backup_data = {
+    "portfolio": st.session_state.portfolio,
+    "events": st.session_state.events,
+    "reminder_text": st.session_state.reminder_text
+}
+json_string = json.dumps(backup_data, ensure_ascii=False, indent=4)
+
+st.sidebar.download_button(
+    label="設定ファイルを保存 (Export)",
+    data=json_string,
+    file_name=f"strategist_backup_{datetime.now().strftime('%Y%m%d')}.json",
+    mime="application/json",
+    use_container_width=True
+)
+
+uploaded_config = st.sidebar.file_uploader("設定ファイルを読み込み (Import)", type=["json"])
+if uploaded_config is not None:
+    if st.sidebar.button("読み込みを実行", use_container_width=True):
+        try:
+            loaded_data = json.load(uploaded_config)
+            # ステートに反映
+            st.session_state.portfolio = loaded_data.get("portfolio", {})
+            st.session_state.events = loaded_data.get("events", [])
+            st.session_state.reminder_text = loaded_data.get("reminder_text", "")
+            
+            # ローカルファイルにも即時保存
+            save_json(DB_FILE, st.session_state.portfolio)
+            save_json(EVENT_FILE, st.session_state.events)
+            save_json(REMINDER_FILE, st.session_state.reminder_text)
+            
+            st.sidebar.success("読み込み完了！")
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"読み込みエラー: {e}")
 
 if st.session_state.show_help:
     st.sidebar.info("""
@@ -179,8 +219,6 @@ if st.session_state.edit_mode:
 # --- メイン表示 ---
 st.title("🚀 Strategist Dashboard: AI Scanner")
 
-# 【改修点】デフォルトのMSCI/出口戦略メトリクスを削除
-
 # 登録済みイベントの表示
 if st.session_state.events:
     st.write("📌 **追加イベント**")
@@ -203,10 +241,7 @@ for key, info in st.session_state.portfolio.items():
     cur = current_prices.get(key)
     if cur and info['shares'] > 0:
         raw_code = key.split('_')[0]
-        if raw_code.isdigit() and len(raw_code) == 4:
-            display_name = f"{raw_code} {info.get('name', '')}"
-        else:
-            display_name = f"{raw_code} {info.get('name', '')}"
+        display_name = f"{raw_code} {info.get('name', '')}"
         
         if "_SHORT" in key:
             label = "信用(売建)"
