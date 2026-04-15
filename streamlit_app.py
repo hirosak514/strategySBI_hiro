@@ -72,7 +72,7 @@ def analyze_images(files):
         
         # モデルの初期化 (最も標準的な指定方法)
         # v1beta等の指定をSDKに任せるため、引数は最小限にします
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2-flash')
         
         prompt = "証券口座の画像から保有銘柄を抽出してJSONで回答してください。キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。通貨=JPY/USD。"
         
