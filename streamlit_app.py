@@ -9,9 +9,8 @@ import re
 import io
 from streamlit.components.v1 import html
 
-# --- 1. ブラウザ自動保存・復元 (JavaScript) ---
+# --- 1. ブラウザストレージ操作 ---
 def trigger_auto_save():
-    """現在のSessionStateをブラウザのlocalStorageにサイレント保存"""
     save_data = {
         "portfolio": st.session_state.portfolio,
         "events": st.session_state.events,
@@ -20,89 +19,97 @@ def trigger_auto_save():
     }
     js_code = f"""
     <script>
-    localStorage.setItem('strategist_data', JSON.stringify({json.dumps(save_data, ensure_ascii=False)}));
-    console.log("Auto-saved to browser storage.");
+    const data = {json.dumps(save_data, ensure_ascii=False)};
+    localStorage.setItem('strategist_storage_v6', JSON.stringify(data));
     </script>
     """
     html(js_code, height=0)
 
 def load_from_browser_js():
-    """起動時にlocalStorageからデータを取得しURL経由でStreamlitに渡す"""
     js_code = """
     <script>
-    const data = localStorage.getItem('strategist_data');
-    if (data) {
-        const url = new URL(window.location);
-        if (!url.searchParams.get('loaded')) {
-            window.parent.postMessage({
-                type: 'streamlit:set_query_params', 
-                query_params: {data: data, loaded: 'true'}
-            }, '*');
-        }
+    const savedData = localStorage.getItem('strategist_storage_v6');
+    if (savedData && !new URL(window.location).searchParams.get('init')) {
+        window.parent.postMessage({
+            type: 'streamlit:set_query_params', 
+            query_params: {data: savedData, init: 'true'}
+        }, '*');
     }
     </script>
     """
     html(js_code, height=0)
 
-# --- 2. データのエクスポート・インポート (手動バックアップ) ---
-def export_data():
-    data = {
-        "portfolio": st.session_state.portfolio,
-        "events": st.session_state.events,
-        "reminder_text": st.session_state.reminder_text,
-        "api_key": st.session_state.api_key
-    }
-    return json.dumps(data, ensure_ascii=False, indent=4)
+# --- 2. データの初期化 ---
+st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
-def import_data(uploaded_json):
-    if uploaded_json is not None:
-        try:
-            data = json.load(uploaded_json)
-            st.session_state.portfolio = data.get("portfolio", {})
-            st.session_state.events = data.get("events", [])
-            st.session_state.reminder_text = data.get("reminder_text", "- ターゲット日程を入力してください")
-            st.session_state.api_key = data.get("api_key", "")
-            return True
-        except: return False
-    return False
-
-# --- 3. セッション状態の初期化と自動復元実行 ---
-# URLパラメータ（JSが仕込んだデータ）があれば最優先で復元
-query_params = st.query_params
-if "data" in query_params and 'portfolio' not in st.session_state:
+if "data" in st.query_params and 'initialized' not in st.session_state:
     try:
-        saved_data = json.loads(query_params["data"])
-        st.session_state.portfolio = saved_data.get("portfolio", {})
-        st.session_state.events = saved_data.get("events", [])
-        st.session_state.reminder_text = saved_data.get("reminder_text", "- ターゲット日程を入力してください")
-        st.session_state.api_key = saved_data.get("api_key", "")
+        loaded = json.loads(st.query_params["data"])
+        st.session_state.portfolio = loaded.get("portfolio", {})
+        st.session_state.events = loaded.get("events", [])
+        st.session_state.reminder_text = loaded.get("reminder_text", "- ターゲット日程を入力してください")
+        st.session_state.api_key = loaded.get("api_key", "")
+        st.session_state.initialized = True
     except: pass
 
-# デフォルト値の設定
 if 'portfolio' not in st.session_state: st.session_state.portfolio = {}
 if 'events' not in st.session_state: st.session_state.events = []
 if 'reminder_text' not in st.session_state: st.session_state.reminder_text = "- ターゲット日程を入力してください"
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
 if 'edit_mode' not in st.session_state: st.session_state.edit_mode = False
 
-# --- 4. 解析・価格取得ロジック ---
-def analyze_images(files):
-    if not st.session_state.api_key: raise ValueError("APIキーが必要です")
-    genai.configure(api_key=st.session_state.api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    prompt = """
-    証券口座の画像から、保有しているすべての銘柄を抽出してください。
-    【集計ルール】
-    1. 銘柄名と種別（現物、信用買、信用売）が同じものは、数量を合計し、取得単価を平均してください。
-    2. キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。
-    3. 日本株=JPY、米国株=USD。
-    JSON形式のみで回答：{"キー": {"name": "銘柄名", "shares": 数量, "cost": 取得単価, "currency": "JPY/USD"}}
-    """
-    response = model.generate_content([prompt] + [Image.open(f) for f in files])
-    return json.loads(re.search(r'\{.*\}', response.text, re.DOTALL).group())
+load_from_browser_js()
 
+# --- 3. AI解析関数 (エラー徹底回避・自動リトライ版) ---
+def analyze_images(files):
+    if not st.session_state.api_key: 
+        st.error("APIキーを入力してください")
+        return {}
+    
+    try:
+        genai.configure(api_key=st.session_state.api_key)
+        prompt = "証券口座の画像から保有銘柄を抽出してJSONで回答してください。キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。通貨=JPY/USD。"
+        
+        processed_images = []
+        for f in files:
+            img = Image.open(f)
+            img.thumbnail((1600, 1600))
+            if img.mode != 'RGB': img = img.convert('RGB')
+            processed_images.append(img)
+
+        # 【リトライ戦略】複数の呼び出し形式を順番に試す
+        response = None
+        error_log = []
+
+        # 試行1: フルパス指定 (最新SDK向け)
+        try:
+            model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
+            response = model.generate_content([prompt] + processed_images)
+        except Exception as e:
+            error_log.append(f"Try1 failed: {str(e)}")
+
+        # 試行2: モデル名のみ (標準SDK向け)
+        if response is None:
+            try:
+                model = genai.GenerativeModel("gemini-1.5-flash")
+                response = model.generate_content([prompt] + processed_images)
+            except Exception as e:
+                error_log.append(f"Try2 failed: {str(e)}")
+
+        if response:
+            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if json_match: return json.loads(json_match.group())
+            else: st.error("AIの回答を解析できませんでした。")
+        else:
+            st.error(f"全試行が失敗しました。以下のログを確認してください: {error_log}")
+            
+    except Exception as e:
+        st.error(f"システムエラー: {str(e)}")
+    return {}
+
+# --- 4. 市場データ取得 ---
 def get_prices(keys):
-    prices = {"USDJPY": 159.2}
+    prices = {"USDJPY": 159.07}
     try: prices["USDJPY"] = yf.Ticker("JPY=X").history(period="1d")['Close'].iloc[-1]
     except: pass
     for k in keys:
@@ -114,116 +121,93 @@ def get_prices(keys):
         except: prices[k] = None
     return prices
 
-# --- 5. UI構築 ---
-st.set_page_config(page_title="Strategist Dashboard", layout="wide")
-load_from_browser_js() # 起動時にブラウザからデータを拾う
-
-# サイドバー
-st.sidebar.header("🔑 System & Backup")
-# APIキー設定
-old_key = st.session_state.api_key
-st.session_state.api_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
-if st.session_state.api_key != old_key:
-    trigger_auto_save() # 変更されたら即保存
-
-# 手動バックアップ機能
-st.sidebar.subheader("💾 手動ファイル保存・読込")
-st.sidebar.download_button(label="現在の全データをファイルに保存", data=export_data(), file_name="strategy_dashboard_backup.json", mime="application/json", use_container_width=True)
-uploaded_json = st.sidebar.file_uploader("保存ファイルを読み込む", type="json")
-if uploaded_json and st.sidebar.button("データを復元する", use_container_width=True):
-    if import_data(uploaded_json):
-        trigger_auto_save() # 復元後も即保存
-        st.rerun()
-
-st.sidebar.divider()
-
-# 画像解析
-st.sidebar.header("📸 Multi-Position Update")
-up_imgs = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg"], accept_multiple_files=True)
-if up_imgs and st.sidebar.button("AIで全画像を解析・集計"):
-    with st.sidebar.spinner("解析中..."):
-        try:
-            st.session_state.portfolio = analyze_images(up_imgs)
-            trigger_auto_save() # 解析完了後に即保存
-            st.rerun()
-        except Exception as e: st.sidebar.error(f"解析エラー: {e}")
-
-# イベント管理
-st.sidebar.divider()
-st.sidebar.header("📅 Event Manager")
-new_e_name = st.sidebar.text_input("イベント名を入力")
-new_e_date = st.sidebar.date_input("日付を選択", value=datetime.now())
-if st.sidebar.button("登録"):
-    if new_e_name:
-        st.session_state.events.append({"id": len(st.session_state.events)+1, "name": new_e_name, "date": new_e_date.strftime("%Y-%m-%d")})
-        trigger_auto_save() # 登録後に即保存
-        st.rerun()
-if st.session_state.events:
-    del_id = st.sidebar.number_input("削除No", min_value=1, step=1)
-    if st.sidebar.button("削除"):
-        st.session_state.events = [e for e in st.session_state.events if e['id'] != del_id]
-        for i, e in enumerate(st.session_state.events): e['id'] = i + 1
-        trigger_auto_save() # 削除後に即保存
-        st.rerun()
-
-st.sidebar.divider()
-# リマインダー編集
-st.sidebar.header("📝 Reminder Editor")
-col_e1, col_e2 = st.sidebar.columns(2)
-if col_e1.button("IR編集"): st.session_state.edit_mode = True; st.rerun()
-if col_e2.button("登録", key="save_ir"): 
-    st.session_state.edit_mode = False
-    trigger_auto_save() # 編集完了後に即保存
-    st.rerun()
-if st.session_state.edit_mode:
-    st.session_state.reminder_text = st.sidebar.text_area("内容を編集", value=st.session_state.reminder_text, height=200)
-
-# --- メイン表示 ---
+# --- 5. メインUI ---
 st.title("🚀 Strategist Dashboard")
 
-# イベント表示
+st.sidebar.header("🔑 System & Data")
+new_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
+if new_key != st.session_state.api_key:
+    st.session_state.api_key = new_key
+    trigger_auto_save()
+
+st.sidebar.divider()
+export_json = json.dumps({"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text, "api_key": st.session_state.api_key}, ensure_ascii=False, indent=4)
+st.sidebar.download_button("設定を保存", data=export_json, file_name="strategy_backup.json", mime="application/json", use_container_width=True)
+
+up_file = st.sidebar.file_uploader("ファイルを読み込む", type="json")
+if up_file and st.sidebar.button("データを復元"):
+    try:
+        data = json.load(up_file)
+        st.session_state.portfolio = data.get("portfolio", {})
+        st.session_state.events = data.get("events", [])
+        st.session_state.reminder_text = data.get("reminder_text", "")
+        st.session_state.api_key = data.get("api_key", "")
+        trigger_auto_save()
+        st.rerun()
+    except: st.sidebar.error("失敗しました")
+
+st.sidebar.divider()
+up_imgs = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+if up_imgs and st.sidebar.button("AIで解析実行"):
+    with st.sidebar.spinner("解析中..."):
+        res = analyze_images(up_imgs)
+        if res:
+            st.session_state.portfolio = res
+            trigger_auto_save()
+            st.rerun()
+
+st.sidebar.divider()
+e_n = st.sidebar.text_input("イベント名")
+e_d = st.sidebar.date_input("日付")
+if st.sidebar.button("登録"):
+    if e_n:
+        st.session_state.events.append({"id": len(st.session_state.events)+1, "name": e_n, "date": e_d.strftime("%Y-%m-%d")})
+        trigger_auto_save()
+        st.rerun()
+
 if st.session_state.events:
-    st.write("📌 **追加イベント**")
+    st.write("📌 **今後の予定**")
     cols = st.columns(len(st.session_state.events))
-    for i, event in enumerate(st.session_state.events):
-        e_date = datetime.strptime(event['date'], "%Y-%m-%d")
-        with cols[i]: st.metric(f"No.{event['id']}: {e_date.strftime('%Y/%m/%d')} {event['name']}", f"{(e_date - datetime.now()).days} 日")
+    for i, ev in enumerate(st.session_state.events):
+        d = datetime.strptime(ev['date'], "%Y-%m-%d")
+        with cols[i]: st.metric(f"{ev['name']}", f"{(d - datetime.now()).days} 日")
 
 st.divider()
-st.header("📉 Real-time Portfolio Monitor")
 
-current_prices = get_prices(st.session_state.portfolio.keys())
-rate = current_prices.get("USDJPY", 159.2)
+st.header("📉 Real-time Portfolio Monitor")
+prices = get_prices(st.session_state.portfolio.keys())
+rate = prices.get("USDJPY", 159.07)
 rows, total_jpy, total_usd = [], 0, 0
 
-for key, info in st.session_state.portfolio.items():
-    cur = current_prices.get(key)
-    if cur and info['shares'] > 0:
-        raw_code = key.split('_')[0]
-        display_name = f"{raw_code} {info.get('name', '')}"
-        
-        if "_SHORT" in key: label, p_jpy = "信用(売建)", (info['cost'] - cur) * info['shares']
-        elif "_MARGIN_LONG" in key: label, p_jpy = "信用(買建)", (cur - info['cost']) * info['shares']
+for k, info in st.session_state.portfolio.items():
+    cur = prices.get(k)
+    if cur:
+        if "_SHORT" in k: label, p_jpy = "信用(売)", (info['cost']-cur)*info['shares']
+        elif "_MARGIN_LONG" in k: label, p_jpy = "信用(買)", (cur-info['cost'])*info['shares']
         else:
             label = "現物"
-            if info.get('currency') == "USD":
-                p_usd = (cur - info['cost']) * info['shares']
+            if info['currency']=="USD":
+                p_usd = (cur-info['cost'])*info['shares']
                 p_jpy, total_usd = p_usd * rate, total_usd + p_usd
-            else: p_jpy = (cur - info['cost']) * info['shares']
-
+            else: p_jpy = (cur-info['cost'])*info['shares']
         total_jpy += p_jpy
-        cost_disp = f"${info['cost']:,}" if info.get('currency') == "USD" else f"¥{info['cost']:,}"
-        cur_disp = f"${cur:,.2f}" if info.get('currency') == "USD" else f"¥{cur:,.0f}"
-        rows.append({"銘柄": display_name, "数量": info['shares'], "区分": label, "取得単価": cost_disp, "現在値": cur_disp, "損益(円)": f"¥{p_jpy:,.0f}"})
+        rows.append({"銘柄": f"{k.split('_')[0]} {info.get('name','')}", "区分": label, "数量": info['shares'], "取得単価": f"${info['cost']:,}" if info['currency']=="USD" else f"¥{info['cost']:,}", "現在値": f"${cur:,.2f}" if info['currency']=="USD" else f"¥{cur:,.0f}", "損益(円)": f"¥{p_jpy:,.0f}"})
 
-m_c1, m_c2, m_c3 = st.columns([3, 2, 5])
-m_c1.metric("総計損益 (JPY)", f"¥{total_jpy:,.0f}", delta=f"USD/JPY: {rate:.2f}")
-m_c2.metric("米国株損益 (USD)", f"${total_usd:,.2f}")
-if m_c3.button('更新', key='main_update'): st.rerun()
-
+c1, c2, c3 = st.columns([3, 2, 5])
+c1.metric("総計損益 (JPY)", f"¥{total_jpy:,.0f}", delta=f"USD/JPY: {rate:.2f}")
+c2.metric("米国株損益 (USD)", f"${total_usd:,.2f}")
+if c3.button("🔄 更新"): st.rerun()
 if rows: st.table(pd.DataFrame(rows))
-else: st.info("画像をアップロードしてください。")
+else: st.info("ポートフォリオが空です。")
 
 st.divider()
 st.subheader("📋 1% Investor's Reminder")
-st.info(st.session_state.reminder_text)
+if st.button("編集"): st.session_state.edit_mode = not st.session_state.edit_mode
+if st.session_state.edit_mode:
+    st.session_state.reminder_text = st.text_area("内容を編集", value=st.session_state.reminder_text, height=150)
+    if st.button("保存"):
+        st.session_state.edit_mode = False
+        trigger_auto_save()
+        st.rerun()
+else:
+    st.info(st.session_state.reminder_text)
