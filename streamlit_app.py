@@ -20,7 +20,7 @@ def trigger_auto_save():
     js_code = f"""
     <script>
     const data = {json.dumps(save_data, ensure_ascii=False)};
-    localStorage.setItem('strategist_storage_v6', JSON.stringify(data));
+    localStorage.setItem('strategist_storage_v7', JSON.stringify(data));
     </script>
     """
     html(js_code, height=0)
@@ -28,7 +28,7 @@ def trigger_auto_save():
 def load_from_browser_js():
     js_code = """
     <script>
-    const savedData = localStorage.getItem('strategist_storage_v6');
+    const savedData = localStorage.getItem('strategist_storage_v7');
     if (savedData && !new URL(window.location).searchParams.get('init')) {
         window.parent.postMessage({
             type: 'streamlit:set_query_params', 
@@ -60,14 +60,20 @@ if 'edit_mode' not in st.session_state: st.session_state.edit_mode = False
 
 load_from_browser_js()
 
-# --- 3. AI解析関数 (エラー徹底回避・自動リトライ版) ---
+# --- 3. AI解析関数 (シンプル＆ストレート版) ---
 def analyze_images(files):
     if not st.session_state.api_key: 
         st.error("APIキーを入力してください")
         return {}
     
     try:
+        # APIキーの設定
         genai.configure(api_key=st.session_state.api_key)
+        
+        # モデルの初期化 (最も標準的な指定方法)
+        # v1beta等の指定をSDKに任せるため、引数は最小限にします
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
         prompt = "証券口座の画像から保有銘柄を抽出してJSONで回答してください。キー：現物=コード、信用買=コード_MARGIN_LONG、信用売=コード_SHORT。通貨=JPY/USD。"
         
         processed_images = []
@@ -77,34 +83,19 @@ def analyze_images(files):
             if img.mode != 'RGB': img = img.convert('RGB')
             processed_images.append(img)
 
-        # 【リトライ戦略】複数の呼び出し形式を順番に試す
-        response = None
-        error_log = []
-
-        # 試行1: フルパス指定 (最新SDK向け)
-        try:
-            model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
-            response = model.generate_content([prompt] + processed_images)
-        except Exception as e:
-            error_log.append(f"Try1 failed: {str(e)}")
-
-        # 試行2: モデル名のみ (標準SDK向け)
-        if response is None:
-            try:
-                model = genai.GenerativeModel("gemini-1.5-flash")
-                response = model.generate_content([prompt] + processed_images)
-            except Exception as e:
-                error_log.append(f"Try2 failed: {str(e)}")
-
+        # 解析実行
+        response = model.generate_content([prompt] + processed_images)
+        
         if response:
             json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-            if json_match: return json.loads(json_match.group())
-            else: st.error("AIの回答を解析できませんでした。")
-        else:
-            st.error(f"全試行が失敗しました。以下のログを確認してください: {error_log}")
-            
+            if json_match:
+                return json.loads(json_match.group())
+            else:
+                st.error("AIの回答にJSONが含まれていませんでした。")
+        
     except Exception as e:
-        st.error(f"システムエラー: {str(e)}")
+        st.error(f"解析失敗: {str(e)}")
+        st.info("APIキーが有効か、Google AI Studioで制限がかかっていないか確認してください。")
     return {}
 
 # --- 4. 市場データ取得 ---
@@ -144,7 +135,7 @@ if up_file and st.sidebar.button("データを復元"):
         st.session_state.api_key = data.get("api_key", "")
         trigger_auto_save()
         st.rerun()
-    except: st.sidebar.error("失敗しました")
+    except: st.sidebar.error("復元に失敗しました")
 
 st.sidebar.divider()
 up_imgs = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
@@ -167,7 +158,7 @@ if st.sidebar.button("登録"):
 
 if st.session_state.events:
     st.write("📌 **今後の予定**")
-    cols = st.columns(len(st.session_state.events))
+    cols = st.columns(max(1, len(st.session_state.events)))
     for i, ev in enumerate(st.session_state.events):
         d = datetime.strptime(ev['date'], "%Y-%m-%d")
         with cols[i]: st.metric(f"{ev['name']}", f"{(d - datetime.now()).days} 日")
