@@ -94,13 +94,26 @@ def get_live_prices(portfolio_keys):
         ticker_symbol = f"{symbol}.T" if symbol.isdigit() and len(symbol) == 4 else ( "7013.T" if symbol == "IHI" else symbol )
         try:
             stock = yf.Ticker(ticker_symbol)
-            hist = stock.history(period="1d")
-            prices[key] = hist['Close'].iloc[-1] if not hist.empty else None
+            # period="2d"で取得し、現在値と前日終値を確保
+            hist = stock.history(period="2d")
+            if len(hist) >= 2:
+                prices[key] = {
+                    "current": hist['Close'].iloc[-1],
+                    "prev_close": hist['Close'].iloc[-2]
+                }
+            elif not hist.empty:
+                prices[key] = {
+                    "current": hist['Close'].iloc[-1],
+                    "prev_close": None
+                }
+            else:
+                prices[key] = None
         except:
             prices[key] = None
             
     try:
-        prices["USDJPY"] = yf.Ticker("JPY=X").history(period="1d")['Close'].iloc[-1]
+        usdjpy_hist = yf.Ticker("JPY=X").history(period="2d")
+        prices["USDJPY"] = usdjpy_hist['Close'].iloc[-1]
     except:
         prices["USDJPY"] = 159.2
     return prices
@@ -122,11 +135,10 @@ if col_api2.button("APIキーとは", use_container_width=True):
     st.session_state.show_help = not st.session_state.show_help
     st.rerun()
 
-# 【追加改修】設定ファイル（JSON）の保存と読み込み
+# 設定ファイル（JSON）の保存と読み込み
 st.sidebar.divider()
 st.sidebar.subheader("💾 Data Backup")
 
-# エクスポート用データの作成
 backup_data = {
     "portfolio": st.session_state.portfolio,
     "events": st.session_state.events,
@@ -147,33 +159,19 @@ if uploaded_config is not None:
     if st.sidebar.button("読み込みを実行", use_container_width=True):
         try:
             loaded_data = json.load(uploaded_config)
-            # ステートに反映
             st.session_state.portfolio = loaded_data.get("portfolio", {})
             st.session_state.events = loaded_data.get("events", [])
             st.session_state.reminder_text = loaded_data.get("reminder_text", "")
-            
-            # ローカルファイルにも即時保存
             save_json(DB_FILE, st.session_state.portfolio)
             save_json(EVENT_FILE, st.session_state.events)
             save_json(REMINDER_FILE, st.session_state.reminder_text)
-            
             st.sidebar.success("読み込み完了！")
             st.rerun()
         except Exception as e:
             st.sidebar.error(f"読み込みエラー: {e}")
 
 if st.session_state.show_help:
-    st.sidebar.info("""
-    **APIキーとは？（初心者向け案内）**
-    
-    このツールが「証券会社の画像を読み取る」ために必要な、**GoogleのAI（Gemini）を利用するための「鍵」**です。
-    
-    **取得方法（完全無料）**
-    1.  以下のリンクをクリックして、Google AI Studioのページを開きます。
-        * 👉 **[APIキーを取得する (Google AI Studio)](https://aistudio.google.com/app/apikey)**
-    2.  ページ内にある **'Create API key'** をクリックします。
-    3.  生成されたコードをコピーして、上の入力欄に貼り付けてください。
-    """)
+    st.sidebar.info("（APIキー取得の案内）...")
 
 st.sidebar.divider()
 st.sidebar.header("📸 Multi-Position Update")
@@ -188,7 +186,7 @@ if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
             st.rerun()
         except Exception as e: st.sidebar.error(f"解析エラー: {e}")
 
-# イベント・リマインダー管理
+# イベント管理
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 new_event_name = st.sidebar.text_input("イベント名を入力")
@@ -219,7 +217,6 @@ if st.session_state.edit_mode:
 # --- メイン表示 ---
 st.title("🚀 Strategist Dashboard: AI Scanner")
 
-# 登録済みイベントの表示
 if st.session_state.events:
     st.write("📌 **追加イベント**")
     cols = st.columns(len(st.session_state.events))
@@ -231,18 +228,28 @@ if st.session_state.events:
 st.divider()
 st.header("📉 Real-time Portfolio Monitor")
 
-current_prices = get_live_prices(st.session_state.portfolio.keys())
-rate = current_prices.get("USDJPY", 159.2)
+current_data = get_live_prices(st.session_state.portfolio.keys())
+rate = current_data.get("USDJPY", 159.2)
 rows = []
 total_profit_jpy = 0
 total_profit_usd_only_us_stocks = 0
 
 for key, info in st.session_state.portfolio.items():
-    cur = current_prices.get(key)
-    if cur and info['shares'] > 0:
+    data = current_data.get(key)
+    if data and info['shares'] > 0:
+        cur = data["current"]
+        prev = data["prev_close"]
+        
+        # 前日比%の計算
+        day_change_pct = ""
+        if prev:
+            change = ((cur - prev) / prev) * 100
+            day_change_pct = f"({'+' if change >= 0 else ''}{change:.2f}%)"
+
         raw_code = key.split('_')[0]
         display_name = f"{raw_code} {info.get('name', '')}"
         
+        # 損益計算（従来どおり）
         if "_SHORT" in key:
             label = "信用(売建)"
             p_jpy = (info['cost'] - cur) * info['shares']
@@ -260,9 +267,12 @@ for key, info in st.session_state.portfolio.items():
 
         total_profit_jpy += p_jpy
         cost_display = f"${info['cost']:,}" if info.get('currency') == "USD" else f"¥{info['cost']:,}"
-        cur_display = f"${cur:,.2f}" if info.get('currency') == "USD" else f"¥{cur:,.0f}"
         
-        rows.append({"銘柄": display_name, "数量": info['shares'], "区分": label, "取得単価": cost_display, "現在値": cur_display, "損益(円)": f"¥{p_jpy:,.0f}"})
+        # 現在値の横に前日比を追加
+        cur_val_display = f"${cur:,.2f}" if info.get('currency') == "USD" else f"¥{cur:,.0f}"
+        cur_display = f"{cur_val_display} {day_change_pct}"
+        
+        rows.append({"銘柄": display_name, "数量": info['shares'], "区分": label, "取得単価": cost_display, "現在値 (前日比)": cur_display, "損益(円)": f"¥{p_jpy:,.0f}"})
 
 m_col1, m_col2, m_col3 = st.columns([3, 2, 5])
 with m_col1: st.metric("総計損益 (JPY)", f"¥{total_profit_jpy:,.0f}", delta=f"USD/JPY: {rate:.2f}")
