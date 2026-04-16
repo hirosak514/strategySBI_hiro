@@ -91,10 +91,11 @@ def get_live_prices(portfolio_keys):
     prices = {}
     for key in portfolio_keys:
         symbol = key.replace("_MARGIN_LONG", "").replace("_SHORT", "")
+        # 日本株と米国株のティッカー判定
         ticker_symbol = f"{symbol}.T" if symbol.isdigit() and len(symbol) == 4 else ( "7013.T" if symbol == "IHI" else symbol )
         try:
             stock = yf.Ticker(ticker_symbol)
-            # period="2d"で取得し、現在値と前日終値を確保
+            # period="2d" で当日と前日のデータを取得
             hist = stock.history(period="2d")
             if len(hist) >= 2:
                 prices[key] = {
@@ -135,17 +136,15 @@ if col_api2.button("APIキーとは", use_container_width=True):
     st.session_state.show_help = not st.session_state.show_help
     st.rerun()
 
-# 設定ファイル（JSON）の保存と読み込み
+# データバックアップ機能
 st.sidebar.divider()
 st.sidebar.subheader("💾 Data Backup")
-
 backup_data = {
     "portfolio": st.session_state.portfolio,
     "events": st.session_state.events,
     "reminder_text": st.session_state.reminder_text
 }
 json_string = json.dumps(backup_data, ensure_ascii=False, indent=4)
-
 st.sidebar.download_button(
     label="設定ファイルを保存 (Export)",
     data=json_string,
@@ -240,7 +239,7 @@ for key, info in st.session_state.portfolio.items():
         cur = data["current"]
         prev = data["prev_close"]
         
-        # 前日比%の計算
+        # 全ての銘柄（日本・米国共通）で前日比を算出
         day_change_pct = ""
         if prev:
             change = ((cur - prev) / prev) * 100
@@ -249,7 +248,7 @@ for key, info in st.session_state.portfolio.items():
         raw_code = key.split('_')[0]
         display_name = f"{raw_code} {info.get('name', '')}"
         
-        # 損益計算（従来どおり）
+        # 損益計算ロジック（踏襲）
         if "_SHORT" in key:
             label = "信用(売建)"
             p_jpy = (info['cost'] - cur) * info['shares']
@@ -268,7 +267,7 @@ for key, info in st.session_state.portfolio.items():
         total_profit_jpy += p_jpy
         cost_display = f"${info['cost']:,}" if info.get('currency') == "USD" else f"¥{info['cost']:,}"
         
-        # 現在値の横に前日比を追加
+        # 現在値の表示形式を整理
         cur_val_display = f"${cur:,.2f}" if info.get('currency') == "USD" else f"¥{cur:,.0f}"
         cur_display = f"{cur_val_display} {day_change_pct}"
         
