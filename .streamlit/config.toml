@@ -1,0 +1,11 @@
+[theme]
+primaryColor = "#00ff00"          # ボタンなどのメインカラー
+backgroundColor = "#0e1117"       # 背景色
+secondaryBackgroundColor = "#262730" # サイドバーの色
+textColor = "#fafafa"             # 文字の色
+font = "sans serif"               # フォント
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
