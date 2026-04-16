@@ -1,16 +1,57 @@
 {
-    "portfolio": {},
+    "portfolio": {
+        "7013_MARGIN_LONG": {
+            "name": "IHI",
+            "shares": 1400,
+            "cost": 3424.9,
+            "currency": "JPY"
+        },
+        "MU": {
+            "name": "マイクロン テクノロジー",
+            "shares": 71,
+            "cost": 368.23,
+            "currency": "USD"
+        },
+        "NEE": {
+            "name": "ネクステラ エナジー",
+            "shares": 105,
+            "cost": 92.21,
+            "currency": "USD"
+        },
+        "VRT": {
+            "name": "バーティブ・ホールディングス",
+            "shares": 70,
+            "cost": 259.07,
+            "currency": "USD"
+        },
+        "8136": {
+            "name": "サンリオ",
+            "shares": 1000,
+            "cost": 1029,
+            "currency": "JPY"
+        }
+    },
     "events": [
         {
             "id": 1,
-            "name": "MSCI銘柄発表",
-            "date": "2026-05-13"
+            "name": " MSCI定期見直し（Index Review）",
+            "date": "2026-05-12"
         },
         {
             "id": 2,
-            "name": "MSCIリバランス",
-            "date": "2026-05-29"
+            "name": "MU決算",
+            "date": "2026-06-24"
+        },
+        {
+            "id": 3,
+            "name": "サンリオ決算",
+            "date": "2026-05-13"
+        },
+        {
+            "id": 4,
+            "name": "IHI決算",
+            "date": "2026-05-08"
         }
     ],
-    "reminder_text": "- ターゲット日程を入力してください\n- 1%の投資家として規律を守る"
+    "reminder_text": "- ターゲット日程を入力してください"
 }
