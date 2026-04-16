@@ -221,7 +221,8 @@ if st.session_state.events:
         try:
             target_date = datetime.strptime(event['date'], "%Y-%m-%d")
             days_left = (target_date - datetime.now()).days
-            cols[i].metric(event['name'], f"あと {days_left} 日", delta_color="inverse")
+            # 日付表示を復活させ、その下に「あと〇日」を表示
+            cols[i].metric(event['name'], event['date'], f"あと {days_left} 日", delta_color="inverse")
         except:
             pass
 
