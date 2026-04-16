@@ -186,13 +186,19 @@ with st.sidebar:
     if uploaded_config is not None and st.button("インポート実行"):
         try:
             config_data = json.load(uploaded_config)
+            # 全ての情報を一旦削除（空にする）してから書き込む
+            st.session_state.portfolio = {}
+            st.session_state.events = []
+            st.session_state.reminder_text = ""
+            
             st.session_state.portfolio = config_data.get("portfolio", {})
             st.session_state.events = config_data.get("events", [])
             st.session_state.reminder_text = config_data.get("reminder_text", "")
+            
             save_json(DB_FILE, st.session_state.portfolio)
             save_json(EVENT_FILE, st.session_state.events)
             save_json(REMINDER_FILE, st.session_state.reminder_text)
-            st.success("設定をインポートしました")
+            st.success("全ての情報をリセットし、新しい設定をインポートしました")
             st.rerun()
         except Exception as e:
             st.error(f"インポート失敗: {e}")
@@ -204,9 +210,12 @@ with st.sidebar:
         with st.spinner("AIが銘柄を抽出中..."):
             try:
                 extracted_data = analyze_multiple_images(up_files)
+                # ポジション情報（portfolio）のみを一旦削除してから書き込む
+                st.session_state.portfolio = {}
                 st.session_state.portfolio.update(extracted_data)
+                
                 save_json(DB_FILE, st.session_state.portfolio)
-                st.success("解析完了！ポートフォリオを更新しました。")
+                st.success("現在のポジションをリセットし、解析結果を反映しました。")
                 st.rerun()
             except Exception as e:
                 st.error(f"エラー: {e}")
@@ -221,7 +230,6 @@ if st.session_state.events:
         try:
             target_date = datetime.strptime(event['date'], "%Y-%m-%d")
             days_left = (target_date - datetime.now()).days
-            # 日付表示を復活させ、その下に「あと〇日」を表示
             cols[i].metric(event['name'], event['date'], f"あと {days_left} 日", delta_color="inverse")
         except:
             pass
