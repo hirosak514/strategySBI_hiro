@@ -91,21 +91,20 @@ def get_live_prices(portfolio_keys):
     prices = {}
     for key in portfolio_keys:
         symbol = key.replace("_MARGIN_LONG", "").replace("_SHORT", "")
-        # 日本株と米国株のティッカー判定
         ticker_symbol = f"{symbol}.T" if symbol.isdigit() and len(symbol) == 4 else ( "7013.T" if symbol == "IHI" else symbol )
         try:
+            # period="5d" に変更して、確実に2日分以上のデータを確保しやすくする
             stock = yf.Ticker(ticker_symbol)
-            # period="2d" で当日と前日のデータを取得
-            hist = stock.history(period="2d")
-            if len(hist) >= 2:
+            hist = stock.history(period="5d")
+            
+            if not hist.empty:
+                # 安全に直近2件を取得するロジック
+                current_price = hist['Close'].iloc[-1]
+                prev_price = hist['Close'].iloc[-2] if len(hist) >= 2 else None
+                
                 prices[key] = {
-                    "current": hist['Close'].iloc[-1],
-                    "prev_close": hist['Close'].iloc[-2]
-                }
-            elif not hist.empty:
-                prices[key] = {
-                    "current": hist['Close'].iloc[-1],
-                    "prev_close": None
+                    "current": current_price,
+                    "prev_close": prev_price
                 }
             else:
                 prices[key] = None
@@ -113,8 +112,9 @@ def get_live_prices(portfolio_keys):
             prices[key] = None
             
     try:
-        usdjpy_hist = yf.Ticker("JPY=X").history(period="2d")
-        prices["USDJPY"] = usdjpy_hist['Close'].iloc[-1]
+        # USDJPYも同様に安全に取得
+        usdjpy_hist = yf.Ticker("JPY=X").history(period="5d")
+        prices["USDJPY"] = usdjpy_hist['Close'].iloc[-1] if not usdjpy_hist.empty else 159.2
     except:
         prices["USDJPY"] = 159.2
     return prices
@@ -122,7 +122,7 @@ def get_live_prices(portfolio_keys):
 # --- 4. UI構築 ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
-# サイドバー設定
+# サイドバー：設定
 st.sidebar.header("🔑 System Settings")
 input_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
 col_api1, col_api2 = st.sidebar.columns(2)
@@ -136,7 +136,7 @@ if col_api2.button("APIキーとは", use_container_width=True):
     st.session_state.show_help = not st.session_state.show_help
     st.rerun()
 
-# データバックアップ機能
+# サイドバー：バックアップ
 st.sidebar.divider()
 st.sidebar.subheader("💾 Data Backup")
 backup_data = {
@@ -169,9 +169,7 @@ if uploaded_config is not None:
         except Exception as e:
             st.sidebar.error(f"読み込みエラー: {e}")
 
-if st.session_state.show_help:
-    st.sidebar.info("（APIキー取得の案内）...")
-
+# サイドバー：AI解析
 st.sidebar.divider()
 st.sidebar.header("📸 Multi-Position Update")
 uploaded_files = st.sidebar.file_uploader("スクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
@@ -185,7 +183,7 @@ if uploaded_files and st.sidebar.button("AIで全画像を解析・集計"):
             st.rerun()
         except Exception as e: st.sidebar.error(f"解析エラー: {e}")
 
-# イベント管理
+# サイドバー：イベント管理
 st.sidebar.divider()
 st.sidebar.header("📅 Event Manager")
 new_event_name = st.sidebar.text_input("イベント名を入力")
@@ -203,6 +201,7 @@ if st.session_state.events:
         save_json(EVENT_FILE, st.session_state.events)
         st.rerun()
 
+# サイドバー：リマインダー
 st.sidebar.divider()
 st.sidebar.header("📝 Reminder Editor")
 col_ir1, col_ir2 = st.sidebar.columns(2)
@@ -239,7 +238,7 @@ for key, info in st.session_state.portfolio.items():
         cur = data["current"]
         prev = data["prev_close"]
         
-        # 全ての銘柄（日本・米国共通）で前日比を算出
+        # 日本株・米国株を問わず前日比を算出
         day_change_pct = ""
         if prev:
             change = ((cur - prev) / prev) * 100
@@ -248,7 +247,7 @@ for key, info in st.session_state.portfolio.items():
         raw_code = key.split('_')[0]
         display_name = f"{raw_code} {info.get('name', '')}"
         
-        # 損益計算ロジック（踏襲）
+        # 損益計算（踏襲）
         if "_SHORT" in key:
             label = "信用(売建)"
             p_jpy = (info['cost'] - cur) * info['shares']
@@ -266,8 +265,6 @@ for key, info in st.session_state.portfolio.items():
 
         total_profit_jpy += p_jpy
         cost_display = f"${info['cost']:,}" if info.get('currency') == "USD" else f"¥{info['cost']:,}"
-        
-        # 現在値の表示形式を整理
         cur_val_display = f"${cur:,.2f}" if info.get('currency') == "USD" else f"¥{cur:,.0f}"
         cur_display = f"{cur_val_display} {day_change_pct}"
         
