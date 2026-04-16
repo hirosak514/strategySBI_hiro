@@ -36,8 +36,6 @@ if 'reminder_text' not in st.session_state:
     st.session_state.reminder_text = load_json(REMINDER_FILE, "- ターゲット日程を入力してください")
 if 'api_key' not in st.session_state:
     st.session_state.api_key = load_json(CONFIG_FILE, {"gemini_key": ""}).get("gemini_key", "")
-if 'edit_mode' not in st.session_state:
-    st.session_state.edit_mode = False
 
 # --- 2. API設定 ---
 current_api_key = st.session_state.api_key or st.secrets.get("GEMINI_API_KEY", "")
@@ -49,7 +47,6 @@ def get_live_prices(portfolio_keys):
     prices = {}
     for key in portfolio_keys:
         symbol = key.split('_')[0]
-        # 日本株・米国株判定
         is_japan = symbol.isdigit() and len(symbol) == 4
         ticker = f"{symbol}.T" if is_japan else ("7013.T" if symbol == "IHI" else symbol)
         
@@ -78,12 +75,25 @@ def analyze_multiple_images(uploaded_files):
         raise ValueError("APIキーが設定されていません。サイドバーで設定してください。")
     
     model = genai.GenerativeModel("gemini-1.5-flash")
+    # プロンプト内容をご提示のファイルと完全同一に保持
     prompt = """
-    証券口座のスクリーンショットから銘柄情報を抽出してください。
-    以下のJSON形式のみで回答してください。余計な説明は不要です。
-    キーは「銘柄コード_区分」としてください（例：8136_現物, 8136_MARGIN_LONG, NVDA_現物）。
-    信用買いは MARGIN_LONG、信用売りは SHORT を末尾に付けてください。
-    {"キー": {"name": "銘柄名", "shares": 数量, "cost": 取得単価, "currency": "JPY" or "USD"}}
+    証券口座のスクリーンショット（複数可）から、保有銘柄の情報を抽出して、以下のJSON形式のみで回答してください。
+    余計な説明や装飾（```json など）は一切不要です。
+
+    【抽出ルール】
+    1. キーは「銘柄コード_区分」としてください。
+       - 現物株の場合：コードのみ（例：8136_現物, NVDA_現物）
+       - 信用買い（制度・無期限）の場合：末尾に _MARGIN_LONG（例：8136_MARGIN_LONG）
+       - 信用売りの場合：末尾に _SHORT（例：8136_SHORT）
+    2. 銘柄コードが不明な場合は、銘柄名をアルファベット表記にして代用してください。
+    3. 数値（数量、取得単価）からカンマや円、ドル記号を除去して数値のみにしてください。
+    4. 通貨は、日本株なら "JPY"、米国株なら "USD" としてください。
+
+    【出力フォーマット】
+    {
+      "銘柄コード_区分": {"name": "銘柄名", "shares": 数量, "cost": 取得単価, "currency": "通貨"},
+      ...
+    }
     """
     
     images = []
@@ -100,7 +110,6 @@ def analyze_multiple_images(uploaded_files):
 # --- 4. UI ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
-# サイドバー処理
 with st.sidebar:
     st.header("🔑 Settings")
     new_api_key = st.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
@@ -112,7 +121,7 @@ with st.sidebar:
 
     st.divider()
 
-    # --- 追加機能：銘柄情報の直接入力 ---
+    # --- 追加：銘柄情報の直接入力 (Event Managerの上に挿入) ---
     st.header("✏️ 銘柄情報の直接入力")
     portfolio_items = list(st.session_state.portfolio.keys())
     if portfolio_items:
@@ -129,7 +138,7 @@ with st.sidebar:
             st.session_state.portfolio[target_key]['shares'] = new_shares
             st.session_state.portfolio[target_key]['cost'] = new_cost
             save_json(DB_FILE, st.session_state.portfolio)
-            st.success(f"No.{selected_no} を更新しました")
+            st.success(f"No.{selected_no} を更新し再計算します")
             st.rerun()
     else:
         st.info("編集する銘柄がありません")
@@ -162,15 +171,10 @@ with st.sidebar:
 
     st.divider()
     st.subheader("💾 Backup")
-    # 安全にバックアップデータを作成
-    final_portfolio = st.session_state.get('portfolio', {})
-    final_events = st.session_state.get('events', [])
-    final_reminder = st.session_state.get('reminder_text', "")
-    
     full_config = {
-        "portfolio": final_portfolio,
-        "events": final_events,
-        "reminder_text": final_reminder
+        "portfolio": st.session_state.portfolio,
+        "events": st.session_state.events,
+        "reminder_text": st.session_state.reminder_text
     }
     st.download_button("設定をエクスポート(JSON)", json.dumps(full_config, ensure_ascii=False, indent=4), "my_config.json", "application/json")
     
@@ -206,7 +210,6 @@ with st.sidebar:
 # --- 5. メイン画面 ---
 st.title("🚀 Strategist Dashboard")
 
-# イベントエリア
 if st.session_state.events:
     st.write("📌 **重要スケジュール**")
     cols = st.columns(len(st.session_state.events))
@@ -220,7 +223,6 @@ if st.session_state.events:
 
 st.divider()
 
-# ポートフォリオエリア
 st.header("📉 Portfolio Monitor")
 if st.button('最新価格に更新'):
     st.rerun()
@@ -238,7 +240,6 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
         cur = p_data["current"]
         prev = p_data["prev_close"]
         
-        # 前日比の計算
         day_change_pct = ""
         if prev:
             change = (cur - prev) / prev * 100
@@ -246,7 +247,6 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
             
         display_name = f"{key.split('_')[0]} {info.get('name','')}"
         
-        # 損益計算ロジック
         if "_SHORT" in key:
             label = "信用(売建)"
             p_jpy = (info['cost'] - cur) * info['shares']
@@ -265,11 +265,10 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
         total_profit_jpy += p_jpy
         cost_display = f"${info['cost']:,}" if info.get('currency') == "USD" else f"¥{info['cost']:,}"
         
-        # 現在値の横に前日比を追加
         cur_val_display = f"${cur:,.2f}" if info.get('currency') == "USD" else f"¥{cur:,.0f}"
         cur_display = f"{cur_val_display} {day_change_pct}"
         
-        # ナンバリング(No.)を追加
+        # 行データに No. を追加
         rows.append({
             "No.": i + 1,
             "銘柄": display_name, 
@@ -280,12 +279,11 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
             "損益(円)": f"¥{p_jpy:,.0f}"
         })
 
-# メトリクス表示
-m_col1, m_col2 = st.columns(2)
+# メトリクス表示部分もご提示の [3, 3, 2] カラム比率を完全踏襲
+m_col1, m_col2, m_col3 = st.columns([3, 3, 2])
 m_col1.metric("総合計損益 (JPY)", f"¥{total_profit_jpy:,.0f}", delta=f"USD/JPY: {rate:.2f}")
 m_col2.metric("米国株合計損益 (USD)", f"${total_profit_usd_only_us_stocks:,.2f}")
 
-# テーブル表示
 if rows:
     df_display = pd.DataFrame(rows)
     st.table(df_display)
