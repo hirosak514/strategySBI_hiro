@@ -74,7 +74,8 @@ def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。サイドバーで設定してください。")
     
-    model = genai.GenerativeModel("gemini-1.5-flash")
+   target_model = next((m for m in available_models if "flash" in m), available_models[0])
+    model = genai.GenerativeModel(target_model)
     # プロンプト内容をご提示のファイルと完全同一に保持
     prompt = """
     証券口座のスクリーンショット（複数可）から、保有銘柄の情報を抽出して、以下のJSON形式のみで回答してください。
