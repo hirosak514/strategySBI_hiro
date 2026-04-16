@@ -74,9 +74,7 @@ def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。サイドバーで設定してください。")
     
-   target_model = next((m for m in available_models if "flash" in m), available_models[0])
-    model = genai.GenerativeModel(target_model)
-    # プロンプト内容をご提示のファイルと完全同一に保持
+    model = genai.GenerativeModel("gemini-1.5-flash")
     prompt = """
     証券口座のスクリーンショット（複数可）から、保有銘柄の情報を抽出して、以下のJSON形式のみで回答してください。
     余計な説明や装飾（```json など）は一切不要です。
@@ -122,7 +120,7 @@ with st.sidebar:
 
     st.divider()
 
-    # --- 追加：銘柄情報の直接入力 (Event Managerの上に挿入) ---
+    # --- 付加機能：銘柄情報の直接入力 (Event Managerの上に挿入) ---
     st.header("✏️ 銘柄情報の直接入力")
     portfolio_items = list(st.session_state.portfolio.keys())
     if portfolio_items:
@@ -132,6 +130,7 @@ with st.sidebar:
         target_key = portfolio_items[selected_no - 1]
         target_info = st.session_state.portfolio[target_key]
         
+        # 編集用入力欄
         new_shares = st.number_input(f"数量 ({target_key})", value=float(target_info.get('shares', 0)))
         new_cost = st.number_input(f"取得単価 ({target_key})", value=float(target_info.get('cost', 0)))
         
@@ -139,7 +138,7 @@ with st.sidebar:
             st.session_state.portfolio[target_key]['shares'] = new_shares
             st.session_state.portfolio[target_key]['cost'] = new_cost
             save_json(DB_FILE, st.session_state.portfolio)
-            st.success(f"No.{selected_no} を更新し再計算します")
+            st.success(f"No.{selected_no} ({target_key}) を更新しました。")
             st.rerun()
     else:
         st.info("編集する銘柄がありません")
@@ -269,7 +268,7 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
         cur_val_display = f"${cur:,.2f}" if info.get('currency') == "USD" else f"¥{cur:,.0f}"
         cur_display = f"{cur_val_display} {day_change_pct}"
         
-        # 行データに No. を追加
+        # 行データ作成 (No. を先頭に追加)
         rows.append({
             "No.": i + 1,
             "銘柄": display_name, 
@@ -280,13 +279,13 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
             "損益(円)": f"¥{p_jpy:,.0f}"
         })
 
-# メトリクス表示部分もご提示の [3, 3, 2] カラム比率を完全踏襲
 m_col1, m_col2, m_col3 = st.columns([3, 3, 2])
 m_col1.metric("総合計損益 (JPY)", f"¥{total_profit_jpy:,.0f}", delta=f"USD/JPY: {rate:.2f}")
 m_col2.metric("米国株合計損益 (USD)", f"${total_profit_usd_only_us_stocks:,.2f}")
 
 if rows:
     df_display = pd.DataFrame(rows)
+    # インデックスを隠して表示
     st.table(df_display)
 else:
     st.info("ポートフォリオに銘柄がありません。スクショをアップロードするか設定をインポートしてください。")
