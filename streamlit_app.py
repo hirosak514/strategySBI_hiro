@@ -74,7 +74,12 @@ def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。サイドバーで設定してください。")
     
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    # --- オリジナルのモデル取得ロジックに完全準拠 ---
+    available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
+    target_model = next((m for m in available_models if "flash" in m), available_models[0])
+    model = genai.GenerativeModel(target_model)
+    # --------------------------------------------
+
     prompt = """
     証券口座のスクリーンショット（複数可）から、保有銘柄の情報を抽出して、以下のJSON形式のみで回答してください。
     余計な説明や装飾（```json など）は一切不要です。
@@ -120,7 +125,7 @@ with st.sidebar:
 
     st.divider()
 
-    # --- 付加機能：銘柄情報の直接入力 (Event Managerの上に挿入) ---
+    # --- 付加機能：銘柄情報の直接入力 ---
     st.header("✏️ 銘柄情報の直接入力")
     portfolio_items = list(st.session_state.portfolio.keys())
     if portfolio_items:
@@ -130,7 +135,6 @@ with st.sidebar:
         target_key = portfolio_items[selected_no - 1]
         target_info = st.session_state.portfolio[target_key]
         
-        # 編集用入力欄
         new_shares = st.number_input(f"数量 ({target_key})", value=float(target_info.get('shares', 0)))
         new_cost = st.number_input(f"取得単価 ({target_key})", value=float(target_info.get('cost', 0)))
         
@@ -138,7 +142,7 @@ with st.sidebar:
             st.session_state.portfolio[target_key]['shares'] = new_shares
             st.session_state.portfolio[target_key]['cost'] = new_cost
             save_json(DB_FILE, st.session_state.portfolio)
-            st.success(f"No.{selected_no} ({target_key}) を更新しました。")
+            st.success(f"No.{selected_no} を更新しました。")
             st.rerun()
     else:
         st.info("編集する銘柄がありません")
@@ -285,7 +289,6 @@ m_col2.metric("米国株合計損益 (USD)", f"${total_profit_usd_only_us_stocks
 
 if rows:
     df_display = pd.DataFrame(rows)
-    # インデックスを隠して表示
     st.table(df_display)
 else:
     st.info("ポートフォリオに銘柄がありません。スクショをアップロードするか設定をインポートしてください。")
