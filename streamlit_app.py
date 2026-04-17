@@ -74,11 +74,9 @@ def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。サイドバーで設定してください。")
     
-    # --- オリジナルのモデル取得ロジックに完全準拠 ---
     available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
     target_model = next((m for m in available_models if "flash" in m), available_models[0])
     model = genai.GenerativeModel(target_model)
-    # --------------------------------------------
 
     prompt = """
     証券口座のスクリーンショット（複数可）から、保有銘柄の情報を抽出して、以下のJSON形式のみで回答してください。
@@ -125,7 +123,7 @@ with st.sidebar:
 
     st.divider()
 
-    # --- 付加機能：銘柄情報の直接入力 ---
+    # --- 改修箇所：銘柄情報の直接入力 (削除ボタン追加 & 数量0対応) ---
     st.header("✏️ 銘柄情報の直接入力")
     portfolio_items = list(st.session_state.portfolio.keys())
     if portfolio_items:
@@ -138,11 +136,26 @@ with st.sidebar:
         new_shares = st.number_input(f"数量 ({target_key})", value=float(target_info.get('shares', 0)))
         new_cost = st.number_input(f"取得単価 ({target_key})", value=float(target_info.get('cost', 0)))
         
-        if st.button("修正"):
-            st.session_state.portfolio[target_key]['shares'] = new_shares
-            st.session_state.portfolio[target_key]['cost'] = new_cost
+        btn_col1, btn_col2 = st.columns(2)
+        
+        if btn_col1.button("修正"):
+            if new_shares == 0:
+                # 数量が0の場合は、銘柄は残すが取得単価も0にする（損益計算を0にするため）
+                st.session_state.portfolio[target_key]['shares'] = 0
+                st.session_state.portfolio[target_key]['cost'] = 0
+                st.info(f"{target_key} の数量と単価を0に更新しました。")
+            else:
+                st.session_state.portfolio[target_key]['shares'] = new_shares
+                st.session_state.portfolio[target_key]['cost'] = new_cost
+                st.success(f"No.{selected_no} を更新しました。")
+            
             save_json(DB_FILE, st.session_state.portfolio)
-            st.success(f"No.{selected_no} を更新しました。")
+            st.rerun()
+
+        if btn_col2.button("削除", type="primary"):
+            del st.session_state.portfolio[target_key]
+            save_json(DB_FILE, st.session_state.portfolio)
+            st.warning(f"No.{selected_no} ({target_key}) を削除しました。")
             st.rerun()
     else:
         st.info("編集する銘柄がありません")
@@ -186,7 +199,6 @@ with st.sidebar:
     if uploaded_config is not None and st.button("インポート実行"):
         try:
             config_data = json.load(uploaded_config)
-            # 全ての情報を一旦削除（空にする）してから書き込む
             st.session_state.portfolio = {}
             st.session_state.events = []
             st.session_state.reminder_text = ""
@@ -210,7 +222,6 @@ with st.sidebar:
         with st.spinner("AIが銘柄を抽出中..."):
             try:
                 extracted_data = analyze_multiple_images(up_files)
-                # ポジション情報（portfolio）のみを一旦削除してから書き込む
                 st.session_state.portfolio = {}
                 st.session_state.portfolio.update(extracted_data)
                 
@@ -249,7 +260,8 @@ total_profit_usd_only_us_stocks = 0
 
 for i, (key, info) in enumerate(st.session_state.portfolio.items()):
     p_data = prices_dict.get(key)
-    if p_data and info.get('shares', 0) > 0:
+    # 数量が0以上（修正で0にしたものを含む）の銘柄を表示対象にする
+    if p_data and info.get('shares', 0) >= 0:
         cur = p_data["current"]
         prev = p_data["prev_close"]
         
@@ -260,33 +272,36 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
             
         display_name = f"{key.split('_')[0]} {info.get('name','')}"
         
-        if "_SHORT" in key:
-            label = "信用(売建)"
-            p_jpy = (info['cost'] - cur) * info['shares']
-        elif "_MARGIN_LONG" in key:
-            label = "信用(買建)"
-            p_jpy = (cur - info['cost']) * info['shares']
+        # 数量が0の場合は損益計算をスキップし0とする
+        if info['shares'] == 0:
+            p_jpy = 0
+            p_usd = 0
         else:
-            label = "現物"
-            if info.get('currency') == "USD":
-                p_usd = (cur - info['cost']) * info['shares']
-                p_jpy = p_usd * rate
-                total_profit_usd_only_us_stocks += p_usd
-            else:
+            if "_SHORT" in key:
+                label = "信用(売建)"
+                p_jpy = (info['cost'] - cur) * info['shares']
+            elif "_MARGIN_LONG" in key:
+                label = "信用(買建)"
                 p_jpy = (cur - info['cost']) * info['shares']
+            else:
+                label = "現物"
+                if info.get('currency') == "USD":
+                    p_usd = (cur - info['cost']) * info['shares']
+                    p_jpy = p_usd * rate
+                    total_profit_usd_only_us_stocks += p_usd
+                else:
+                    p_jpy = (cur - info['cost']) * info['shares']
 
         total_profit_jpy += p_jpy
         cost_display = f"${info['cost']:,}" if info.get('currency') == "USD" else f"¥{info['cost']:,}"
-        
         cur_val_display = f"${cur:,.2f}" if info.get('currency') == "USD" else f"¥{cur:,.0f}"
         cur_display = f"{cur_val_display} {day_change_pct}"
         
-        # 行データ作成 (No. を先頭に追加)
         rows.append({
             "No.": i + 1,
             "銘柄": display_name, 
             "数量": info['shares'], 
-            "区分": label, 
+            "区分": label if info['shares'] > 0 else "決済済(表示用)", 
             "取得単価": cost_display, 
             "現在値 (前日比)": cur_display, 
             "損益(円)": f"¥{p_jpy:,.0f}"
@@ -300,7 +315,7 @@ if rows:
     df_display = pd.DataFrame(rows)
     st.table(df_display)
 else:
-    st.info("ポートフォリオに銘柄がありません。スクショをアップロードするか設定をインポートしてください。")
+    st.info("ポートフォリオに銘柄がありません。")
 
 st.divider()
 st.subheader("📋 Reminder")
