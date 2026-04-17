@@ -32,7 +32,7 @@ def save_json(file_path, data):
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = load_json(DB_FILE, {})
 if 'backup_portfolio' not in st.session_state:
-    st.session_state.backup_portfolio = None  # 復元用データ保持
+    st.session_state.backup_portfolio = None
 if 'events' not in st.session_state:
     st.session_state.events = load_json(EVENT_FILE, [])
 if 'reminder_text' not in st.session_state:
@@ -40,7 +40,6 @@ if 'reminder_text' not in st.session_state:
 if 'api_key' not in st.session_state:
     st.session_state.api_key = load_json(CONFIG_FILE, {"gemini_key": ""}).get("gemini_key", "")
 
-# 復元用バックアップ作成関数
 def create_backup():
     st.session_state.backup_portfolio = copy.deepcopy(st.session_state.portfolio)
 
@@ -81,29 +80,23 @@ def analyze_multiple_images(uploaded_files):
     available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
     target_model = next((m for m in available_models if "flash" in m), available_models[0])
     model = genai.GenerativeModel(target_model)
-    prompt = "証券口座のスクショから銘柄情報をJSONで抽出してください。キーは「銘柄コード_区分」..." # プロンプト詳細は以前と同じ
+    prompt = "証券口座のスクショから銘柄情報をJSONで抽出してください。..." # プロンプト詳細は以前と同様
     images = [Image.open(f) for f in uploaded_files]
     response = model.generate_content([prompt] + images)
     json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
     return json.loads(json_match.group()) if json_match else {}
 
-# --- 4. UI設定 ---
+# --- 4. UI ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
-# CSSによるデザイン調整
 st.markdown("""
 <style>
-    /* スケジュールのフォントサイズと色 */
-    .event-card {
-        background-color: rgba(255, 255, 255, 0.05);
-        border-radius: 5px;
-        padding: 10px;
-        text-align: center;
-    }
+    /* スケジュール表示用 */
+    .event-card { background-color: rgba(255, 255, 255, 0.05); border-radius: 5px; padding: 10px; text-align: center; }
     .event-date { font-size: 0.8rem; color: #ccc; }
     .event-days { font-size: 1rem; color: #ffffff; font-weight: bold; }
     
-    /* 削除ボタンを赤くする */
+    /* 削除ボタン赤色化：カラムの3番目のボタンに適用 */
     div[data-testid="column"]:nth-child(3) button {
         background-color: #ff4b4b !important;
         color: white !important;
@@ -118,13 +111,16 @@ with st.sidebar:
     if st.button("APIキーを保存"):
         st.session_state.api_key = new_api_key
         save_json(CONFIG_FILE, {"gemini_key": new_api_key})
+        st.success("APIキーを保存しました")
         st.rerun()
 
     st.divider()
 
-    # --- 銘柄編集セクション ---
+    # --- ✏️ 銘柄情報の直接入力 (ボタン常時表示版) ---
     st.header("✏️ 銘柄情報の直接入力")
     portfolio_items = list(st.session_state.portfolio.keys())
+    
+    selected_no = None
     if portfolio_items:
         no_options = [i + 1 for i in range(len(portfolio_items))]
         selected_no = st.selectbox("銘柄No.を選択", options=no_options)
@@ -133,10 +129,19 @@ with st.sidebar:
         
         new_shares = st.number_input(f"数量 ({target_key})", value=float(target_info.get('shares', 0)))
         new_cost = st.number_input(f"取得単価 ({target_key})", value=float(target_info.get('cost', 0)))
-        
-        col_mod, col_rev, col_del = st.columns(3)
-        
-        if col_mod.button("修正"):
+    else:
+        st.info("編集する銘柄がありません")
+        new_shares, new_cost = 0, 0
+
+    col_mod, col_rev, col_del = st.columns(3)
+    
+    # ボタン自体は常に配置
+    mod_btn = col_mod.button("修正")
+    rev_btn = col_rev.button("復元", type="primary")
+    del_btn = col_del.button("削除")
+
+    if selected_no:
+        if mod_btn:
             create_backup()
             if new_shares == 0:
                 st.session_state.portfolio[target_key].update({"shares": 0, "cost": 0})
@@ -145,17 +150,17 @@ with st.sidebar:
             save_json(DB_FILE, st.session_state.portfolio)
             st.rerun()
             
-        if col_rev.button("復元", type="primary"):
+        if rev_btn:
             if st.session_state.backup_portfolio is not None:
                 st.session_state.portfolio = copy.deepcopy(st.session_state.backup_portfolio)
-                st.session_state.backup_portfolio = None # 1つ前限定
+                st.session_state.backup_portfolio = None
                 save_json(DB_FILE, st.session_state.portfolio)
-                st.success("ポジションを復元しました")
+                st.success("復元しました")
                 st.rerun()
             else:
-                st.error("復元できる履歴がありません")
+                st.error("履歴なし")
 
-        if col_del.button("削除"):
+        if del_btn:
             create_backup()
             del st.session_state.portfolio[target_key]
             save_json(DB_FILE, st.session_state.portfolio)
@@ -163,29 +168,67 @@ with st.sidebar:
 
     st.divider()
     
-    # --- インポート ---
+    # --- 📌 Event Manager ---
+    st.header("📌 Event Manager")
+    with st.expander("イベントの追加/削除"):
+        ev_name = st.text_input("イベント名")
+        ev_date = st.date_input("日付")
+        if st.button("イベント追加"):
+            st.session_state.events.append({"name": ev_name, "date": ev_date.strftime("%Y-%m-%d")})
+            save_json(EVENT_FILE, st.session_state.events)
+            st.rerun()
+        
+        if st.session_state.events:
+            idx = st.selectbox("削除するイベント", range(len(st.session_state.events)), format_func=lambda x: st.session_state.events[x]['name'])
+            if st.button("選択したイベントを削除"):
+                st.session_state.events.pop(idx)
+                save_json(EVENT_FILE, st.session_state.events)
+                st.rerun()
+
+    st.divider()
+
+    # --- 📋 Reminder Edit ---
+    st.header("📋 Reminder Edit")
+    new_reminder = st.text_area("リマインダー内容", value=st.session_state.reminder_text)
+    if st.button("リマインダー更新"):
+        st.session_state.reminder_text = new_reminder
+        save_json(REMINDER_FILE, new_reminder)
+        st.rerun()
+
+    st.divider()
+
+    # --- 💾 Backup (Export/Import) ---
+    st.subheader("💾 Backup")
+    full_config = {
+        "portfolio": st.session_state.portfolio,
+        "events": st.session_state.events,
+        "reminder_text": st.session_state.reminder_text
+    }
+    st.download_button("設定をエクスポート(JSON)", json.dumps(full_config, ensure_ascii=False, indent=4), "my_config.json", "application/json")
+    
     uploaded_config = st.file_uploader("設定をインポート(JSON)", type=["json"])
     if uploaded_config is not None and st.button("インポート実行"):
         try:
             config_data = json.load(uploaded_config)
-            create_backup() # インポート前にバックアップ
+            create_backup()
             st.session_state.portfolio = config_data.get("portfolio", {})
             st.session_state.events = config_data.get("events", [])
             st.session_state.reminder_text = config_data.get("reminder_text", "")
             save_json(DB_FILE, st.session_state.portfolio)
             save_json(EVENT_FILE, st.session_state.events)
             save_json(REMINDER_FILE, st.session_state.reminder_text)
-            st.success("インポート完了")
             st.rerun()
         except: st.error("失敗")
 
     st.divider()
+
+    # --- 📸 AI Scanner ---
     st.header("📸 AI Scanner")
     up_files = st.file_uploader("スクショ", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
     if up_files and st.button("AI解析実行"):
         with st.spinner("解析中..."):
             try:
-                create_backup() # 解析前にバックアップ
+                create_backup()
                 extracted_data = analyze_multiple_images(up_files)
                 st.session_state.portfolio = extracted_data
                 save_json(DB_FILE, st.session_state.portfolio)
@@ -200,19 +243,22 @@ if st.session_state.events:
     event_cols = st.columns(len(st.session_state.events))
     for i, event in enumerate(st.session_state.events):
         with event_cols[i]:
-            target_date = datetime.strptime(event['date'], "%Y-%m-%d")
-            days_left = (target_date - datetime.now()).days
-            st.markdown(f"""
-                <div class="event-card">
-                    <div style="font-weight:bold; font-size:0.9rem;">{event['name']}</div>
-                    <div class="event-date">{event['date']}</div>
-                    <div class="event-days">あと {days_left} 日</div>
-                </div>
-            """, unsafe_allow_html=True)
+            try:
+                target_date = datetime.strptime(event['date'], "%Y-%m-%d")
+                days_left = (target_date - datetime.now()).days
+                st.markdown(f"""
+                    <div class="event-card">
+                        <div style="font-weight:bold; font-size:0.9rem;">{event['name']}</div>
+                        <div class="event-date">{event['date']}</div>
+                        <div class="event-days">あと {days_left} 日</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            except: pass
 
 st.divider()
 st.header("📉 Portfolio Monitor")
 
+# (以降、テーブル表示等は以前のロジックを完全踏襲)
 prices_dict = get_live_prices(st.session_state.portfolio.keys())
 rate = prices_dict.get("USDJPY", 159.2)
 
@@ -227,22 +273,17 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
         prev = p_data["prev_close"]
         change_pct = f"({(cur - prev) / prev * 100:+.2f}%)" if prev else ""
         
-        # 損益計算（数量0なら0）
         if info['shares'] > 0:
-            if "_SHORT" in key:
-                p_jpy = (info['cost'] - cur) * info['shares']
-            elif "_MARGIN_LONG" in key:
-                p_jpy = (cur - info['cost']) * info['shares']
+            if "_SHORT" in key: p_jpy = (info['cost'] - cur) * info['shares']
+            elif "_MARGIN_LONG" in key: p_jpy = (cur - info['cost']) * info['shares']
             else:
                 if info.get('currency') == "USD":
                     p_usd = (cur - info['cost']) * info['shares']
                     p_jpy = p_usd * rate
                     total_usd += p_usd
-                else:
-                    p_jpy = (cur - info['cost']) * info['shares']
+                else: p_jpy = (cur - info['cost']) * info['shares']
             total_jpy += p_jpy
-        else:
-            p_jpy = 0
+        else: p_jpy = 0
 
         rows.append({
             "No.": i + 1,
@@ -258,10 +299,8 @@ col_m1, col_m2 = st.columns(2)
 col_m1.metric("総合計損益", f"¥{total_jpy:,.0f}", f"USD/JPY: {rate:.2f}")
 col_m2.metric("米国株損益", f"${total_usd:,.2f}")
 
-if rows:
-    st.table(pd.DataFrame(rows))
-else:
-    st.info("銘柄がありません")
+if rows: st.table(pd.DataFrame(rows))
+else: st.info("銘柄がありません")
 
 st.divider()
 st.subheader("📋 Reminder")
