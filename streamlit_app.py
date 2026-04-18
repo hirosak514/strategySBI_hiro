@@ -8,12 +8,17 @@ import json
 import re
 import os
 import copy
+import gspread
+from google.oauth2.service_account import Credentials
 
 # --- 0. データの保存・読み込み ---
 DB_FILE = "portfolio.json"
 EVENT_FILE = "events.json"
 REMINDER_FILE = "reminder.json"
 CONFIG_FILE = "config.json"
+
+# 【改修箇所】対象のスプレッドシートURLをここに記述してください
+FIXED_SHEET_URL = "https://docs.google.com/spreadsheets/d/17kAFl14q8EaaQ6kvezlAe1Yzr71Yo673T61--_cyESQ/edit?usp=sharing"
 
 def load_json(file_path, default_value):
     if os.path.exists(file_path):
@@ -27,6 +32,42 @@ def load_json(file_path, default_value):
 def save_json(file_path, data):
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
+
+# --- Google Spreadsheet 連携関数 ---
+def get_gspread_client():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    try:
+        # Streamlit secrets または環境変数から認証情報を取得
+        creds_dict = st.secrets["gcp_service_account"]
+        credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        return gspread.authorize(credentials)
+    except Exception as e:
+        st.error(f"Google認証に失敗しました: {e}")
+        return None
+
+def export_to_spreadsheet(data):
+    gc = get_gspread_client()
+    if not gc: return
+    try:
+        sh = gc.open_by_url(FIXED_SHEET_URL)
+        ws = sh.get_worksheet(0)
+        ws.clear()
+        ws.update('A1', [[json.dumps(data, ensure_ascii=False)]])
+        st.success("スプレッドシートへのエクスポートが完了しました")
+    except Exception as e:
+        st.error(f"エクスポート失敗: {e}")
+
+def import_from_spreadsheet():
+    gc = get_gspread_client()
+    if not gc: return None
+    try:
+        sh = gc.open_by_url(FIXED_SHEET_URL)
+        ws = sh.get_worksheet(0)
+        content = ws.acell('A1').value
+        return json.loads(content) if content else None
+    except Exception as e:
+        st.error(f"インポート失敗: {e}")
+        return None
 
 # --- 1. セッション状態の初期化 ---
 if 'portfolio' not in st.session_state:
@@ -82,11 +123,9 @@ def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。サイドバーで設定してください。")
     
-    # --- オリジナルのモデル取得ロジックに完全準拠 ---
     available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
     target_model = next((m for m in available_models if "flash" in m), available_models[0])
     model = genai.GenerativeModel(target_model)
-    # --------------------------------------------
 
     prompt = """
     証券口座のスクリーンショット（複数可）から、保有銘柄の情報を抽出して、以下のJSON形式のみで回答してください。
@@ -122,11 +161,9 @@ def analyze_multiple_images(uploaded_files):
 # --- 4. UI ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
-# CSS: スケジュールの文字色（白）と削除ボタン（赤）
 st.markdown("""
 <style>
     [data-testid="stMetricDelta"] > div { color: white !important; }
-    /* 3番目のカラムにあるボタン（削除）を赤くする */
     div[data-testid="column"]:nth-child(3) button {
         background-color: #ff4b4b !important;
         color: white !important;
@@ -145,7 +182,6 @@ with st.sidebar:
 
     st.divider()
 
-    # --- ✏️ 銘柄情報の直接入力 (修正・復元・削除) ---
     st.header("✏️ 銘柄情報の直接入力")
     portfolio_items = list(st.session_state.portfolio.keys())
     selected_no = None
@@ -218,22 +254,25 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.subheader("💾 Backup")
+    st.subheader("💾 Backup (Spreadsheet)")
     full_config = {"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text}
-    st.download_button("設定をエクスポート(JSON)", json.dumps(full_config, ensure_ascii=False, indent=4), "my_config.json", "application/json")
-    uploaded_config = st.file_uploader("設定をインポート(JSON)", type=["json"])
-    if uploaded_config is not None and st.button("インポート実行"):
-        try:
-            config_data = json.load(uploaded_config)
+    
+    # 【改修箇所】固定URLを使用するように変更
+    if st.button("設定をエクスポート"):
+        export_to_spreadsheet(full_config)
+
+    if st.button("設定をインポート"):
+        imported_data = import_from_spreadsheet()
+        if imported_data:
             backup_portfolio()
-            st.session_state.portfolio = config_data.get("portfolio", {})
-            st.session_state.events = config_data.get("events", [])
-            st.session_state.reminder_text = config_data.get("reminder_text", "")
+            st.session_state.portfolio = imported_data.get("portfolio", {})
+            st.session_state.events = imported_data.get("events", [])
+            st.session_state.reminder_text = imported_data.get("reminder_text", "")
             save_json(DB_FILE, st.session_state.portfolio)
             save_json(EVENT_FILE, st.session_state.events)
             save_json(REMINDER_FILE, st.session_state.reminder_text)
+            st.success("インポート完了")
             st.rerun()
-        except Exception as e: st.error(f"失敗: {e}")
 
     st.divider()
     st.header("📸 AI Scanner")
@@ -258,7 +297,6 @@ if st.session_state.events:
         try:
             target_date = datetime.strptime(event['date'], "%Y-%m-%d")
             days_left = (target_date - datetime.now()).days
-            # 文字サイズを少し小さく調整
             cols[i].markdown(f"<small>{event['name']}</small>", unsafe_allow_html=True)
             cols[i].metric("", event['date'], f"あと {days_left} 日")
         except: pass
