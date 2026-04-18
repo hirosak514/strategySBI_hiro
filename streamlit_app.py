@@ -18,7 +18,7 @@ REMINDER_FILE = "reminder.json"
 CONFIG_FILE = "config.json"
 
 # 【改修箇所】対象のスプレッドシートURLをここに記述してください
-FIXED_SHEET_URL = "https://docs.google.com/spreadsheets/d/17kAFl14q8EaaQ6kvezlAe1Yzr71Yo673T61--_cyESQ/edit?usp=sharing"
+FIXED_SHEET_URL = "https://docs.google.com/spreadsheets/d/17kAFl14q8EaaQ6kvezlAe1Yzr71Yo673T61--_cyESQ/edit"
 
 def load_json(file_path, default_value):
     if os.path.exists(file_path):
