@@ -87,30 +87,22 @@ current_api_key = st.session_state.api_key or st.secrets.get("GEMINI_API_KEY", "
 if current_api_key:
     genai.configure(api_key=current_api_key)
 
-# --- 3. 価格取得関数 (株探バックアップ付き) ---
+# --- 3. 価格取得関数 (Yahoo禁止・株探＆Google Finance代替版) ---
 @st.cache_data(ttl=60)
 def get_live_prices(portfolio_keys):
     prices = {}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    
     for key in portfolio_keys:
         symbol = key.split('_')[0]
         is_japan = bool(re.match(r'^\d{4}$', symbol))
-        ticker_symbol = f"{symbol}.T" if is_japan else ("7013.T" if symbol == "IHI" else symbol)
-        
         current = 0
         prev_close = 0
         
-        try:
-            stock = yf.Ticker(ticker_symbol)
-            info = stock.info
-            current = info.get('regularMarketPrice') or info.get('currentPrice')
-            prev_close = info.get('previousClose')
-        except:
-            pass
-
-        if is_japan and (current is None or current == 0):
+        # A. 日本株の場合：株探(Kabu-tan)を使用
+        if is_japan:
             try:
                 url = f"https://kabutan.jp/stock/?code={symbol}"
-                headers = {"User-Agent": "Mozilla/5.0"}
                 res = requests.get(url, headers=headers, timeout=5)
                 soup = BeautifulSoup(res.text, 'html.parser')
                 price_tag = soup.find('span', class_='kabuka')
@@ -126,21 +118,38 @@ def get_live_prices(portfolio_keys):
             except:
                 pass
 
-        if current is None or current == 0:
+        # B. 米国株の場合：Google Finance (Web取得) を試行
+        else:
             try:
-                hist = yf.Ticker(ticker_symbol).history(period="1d")
-                current = hist['Close'].iloc[-1] if not hist.empty else 0
-                prev_close = current
+                # 特殊対応: IHIなど
+                search_symbol = "7013:TYO" if symbol == "IHI" else f"{symbol}:NASDAQ"
+                url = f"https://www.google.com/finance/quote/{search_symbol}"
+                res = requests.get(url, headers=headers, timeout=5)
+                soup = BeautifulSoup(res.text, 'html.parser')
+                # Google Financeの価格クラス（変更される可能性があります）
+                price_div = soup.find("div", {"class": "YMlKec fxKbKc"})
+                if price_div:
+                    current = float(price_div.text.replace('$', '').replace(',', ''))
+                    prev_div = soup.find("div", {"class": "P6u0m"}) # 前日終値エリア
+                    if prev_div:
+                        prev_close = float(prev_div.text.replace('$', '').replace(',', ''))
             except:
-                current = 0
+                pass
 
+        # デフォルト値の設定（取得失敗時）
         prices[key] = {"current": current, "prev_close": prev_close if prev_close else current}
             
+    # 為替レート (USD/JPY)
     try:
-        usdjpy = yf.Ticker("JPY=X")
-        prices["USDJPY"] = usdjpy.history(period="1d")['Close'].iloc[-1]
+        # 為替だけは安定性のためGoogle Financeから取得
+        url = "https://www.google.com/finance/quote/USD-JPY"
+        res = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        price_div = soup.find("div", {"class": "YMlKec fxKbKc"})
+        prices["USDJPY"] = float(price_div.text.replace(',', '')) if price_div else 159.2
     except:
         prices["USDJPY"] = 159.2
+        
     return prices
 
 def analyze_multiple_images(uploaded_files):
@@ -158,7 +167,6 @@ def analyze_multiple_images(uploaded_files):
 # --- 4. UI設定 ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
-# 【改修箇所】ダッシュボードのメトリクスを複数行対応にするCSS
 st.markdown("""
 <style>
     [data-testid="stMetricDelta"] > div { color: white !important; }
@@ -166,7 +174,6 @@ st.markdown("""
         background-color: #ff4b4b !important;
         color: white !important;
     }
-    /* メトリクスの折り返し設定 */
     [data-testid="stHorizontalBlock"] {
         flex-wrap: wrap !important;
     }
@@ -266,14 +273,11 @@ st.title("🚀 Strategist Dashboard")
 
 if st.session_state.events:
     st.write("📌 **重要スケジュール**")
-    # 【改修箇所】項目が多い場合に複数行に折り返すため固定のカラム数を指定せず描画
-    # コンテナを作成し、その中で個別のメトリクスを表示
     event_container = st.container()
-    cols = event_container.columns(min(len(st.session_state.events), 5)) # 最大5列で折り返し
+    cols = event_container.columns(min(len(st.session_state.events), 5))
     for i, event in enumerate(st.session_state.events):
         target_date = datetime.strptime(event['date'], "%Y-%m-%d")
         days_left = (target_date - datetime.now()).days
-        # カラムを循環させて使用
         cols[i % 5].metric(event['name'], event['date'], f"あと {days_left} 日")
 
 st.divider()
