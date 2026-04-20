@@ -87,30 +87,44 @@ current_api_key = st.session_state.api_key or st.secrets.get("GEMINI_API_KEY", "
 if current_api_key:
     genai.configure(api_key=current_api_key)
 
-# --- 3. 解析・価格取得関数 ---
+# --- 3. 価格取得関数 (価格精度・ロジック強化) ---
 @st.cache_data(ttl=60)
 def get_live_prices(portfolio_keys):
     prices = {}
     for key in portfolio_keys:
         symbol = key.split('_')[0]
+        # 日本株かどうかの判定（数字4桁）
         is_japan = symbol.isdigit() and len(symbol) == 4
         ticker_symbol = f"{symbol}.T" if is_japan else ("7013.T" if symbol == "IHI" else symbol)
+        
         try:
             stock = yf.Ticker(ticker_symbol)
             info = stock.info
-            current = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('bid')
-            if current is None:
-                hist = stock.history(period="1d", interval="1m")
-                current = hist['Close'].iloc[-1] if not hist.empty else None
             
+            # yfinanceのプロパティから最適な価格を選択
+            # 日本株・米国株ともに 'regularMarketPrice' が基本
+            current = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('bid')
+            
+            # 市場閉場中や取得失敗時はhistoryを使用
+            if current is None:
+                hist = stock.history(period="1d")
+                if not hist.empty:
+                    current = hist['Close'].iloc[-1]
+            
+            # 前日終値
             prev_close = info.get('previousClose') or info.get('regularMarketPreviousClose')
             if prev_close is None:
                 hist_5d = stock.history(period="5d")
-                prev_close = hist_5d['Close'].iloc[-2] if len(hist_5d) >= 2 else current
-            
-            prices[key] = {"current": current, "prev_close": prev_close}
+                if len(hist_5d) >= 2:
+                    prev_close = hist_5d['Close'].iloc[-2]
+
+            if current:
+                prices[key] = {"current": current, "prev_close": prev_close}
+            else:
+                prices[key] = None
         except:
             prices[key] = None
+            
     try:
         usdjpy = yf.Ticker("JPY=X")
         prices["USDJPY"] = usdjpy.info.get('regularMarketPrice') or usdjpy.history(period="1d")['Close'].iloc[-1]
@@ -130,13 +144,12 @@ def analyze_multiple_images(uploaded_files):
     if json_match: return json.loads(json_match.group())
     raise ValueError("解析失敗")
 
-# --- 4. UI (オリジナル構成の厳密復元) ---
+# --- 4. UI (サイドバー構成をオリジナルに完全固定) ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
 st.markdown("""
 <style>
     [data-testid="stMetricDelta"] > div { color: white !important; }
-    /* 3番目のカラム（削除ボタン）を赤くするオリジナル指定 */
     div[data-testid="column"]:nth-child(3) button {
         background-color: #ff4b4b !important;
         color: white !important;
@@ -280,6 +293,7 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
         day_change_pct = f"({(cur - prev) / prev * 100:+.2f}%)" if prev else ""
         display_name = f"{key.split('_')[0]} {info.get('name','')}"
         
+        # オリジナルの計算ロジック（信用・現物・通貨別）
         if info['shares'] == 0:
             label, p_jpy = "決済済", 0
         else:
