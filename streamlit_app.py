@@ -87,7 +87,7 @@ current_api_key = st.session_state.api_key or st.secrets.get("GEMINI_API_KEY", "
 if current_api_key:
     genai.configure(api_key=current_api_key)
 
-# --- 3. 【重要改修】ハイブリッド価格取得関数 ---
+# --- 3. 価格取得関数 (株探バックアップ付き) ---
 @st.cache_data(ttl=60)
 def get_live_prices(portfolio_keys):
     prices = {}
@@ -99,7 +99,6 @@ def get_live_prices(portfolio_keys):
         current = 0
         prev_close = 0
         
-        # A. Yahoo Finance 試行
         try:
             stock = yf.Ticker(ticker_symbol)
             info = stock.info
@@ -108,24 +107,18 @@ def get_live_prices(portfolio_keys):
         except:
             pass
 
-        # B. 【解決策】日本株で価格が0の場合、株探(Kabu-tan)から取得
         if is_japan and (current is None or current == 0):
             try:
                 url = f"https://kabutan.jp/stock/?code={symbol}"
                 headers = {"User-Agent": "Mozilla/5.0"}
                 res = requests.get(url, headers=headers, timeout=5)
                 soup = BeautifulSoup(res.text, 'html.parser')
-                
-                # 現値の抽出
                 price_tag = soup.find('span', class_='kabuka')
                 if price_tag:
                     current = float(price_tag.text.replace(',', '').replace('円', ''))
-                
-                # 前日比から前日終値を逆算
                 change_tag = soup.find('span', class_='zenjitsu_at')
                 if change_tag and current:
                     change_text = change_tag.text.replace(',', '').replace('円', '')
-                    # 数値部分だけを取り出す
                     match = re.search(r'[+-]?\d+\.?\d*', change_text)
                     if match:
                         change_val = float(match.group())
@@ -133,18 +126,16 @@ def get_live_prices(portfolio_keys):
             except:
                 pass
 
-        # C. 最終フォールバック
         if current is None or current == 0:
             try:
                 hist = yf.Ticker(ticker_symbol).history(period="1d")
                 current = hist['Close'].iloc[-1] if not hist.empty else 0
-                prev_close = current # 取得できない場合は現値を入れる
+                prev_close = current
             except:
                 current = 0
 
         prices[key] = {"current": current, "prev_close": prev_close if prev_close else current}
             
-    # 為替
     try:
         usdjpy = yf.Ticker("JPY=X")
         prices["USDJPY"] = usdjpy.history(period="1d")['Close'].iloc[-1]
@@ -164,15 +155,24 @@ def analyze_multiple_images(uploaded_files):
     if json_match: return json.loads(json_match.group())
     raise ValueError("解析失敗")
 
-# --- 4. UI設定 (オリジナルに完全忠実) ---
+# --- 4. UI設定 ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
+# 【改修箇所】ダッシュボードのメトリクスを複数行対応にするCSS
 st.markdown("""
 <style>
     [data-testid="stMetricDelta"] > div { color: white !important; }
     div[data-testid="column"]:nth-child(3) button {
         background-color: #ff4b4b !important;
         color: white !important;
+    }
+    /* メトリクスの折り返し設定 */
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
+    [data-testid="stMetric"] {
+        min-width: 150px;
+        max-width: 200px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -261,14 +261,20 @@ with st.sidebar:
         save_json(DB_FILE, st.session_state.portfolio)
         st.rerun()
 
-# --- 5. メイン画面 (オリジナル準拠) ---
+# --- 5. メイン画面 ---
 st.title("🚀 Strategist Dashboard")
 
 if st.session_state.events:
-    cols = st.columns(len(st.session_state.events))
+    st.write("📌 **重要スケジュール**")
+    # 【改修箇所】項目が多い場合に複数行に折り返すため固定のカラム数を指定せず描画
+    # コンテナを作成し、その中で個別のメトリクスを表示
+    event_container = st.container()
+    cols = event_container.columns(min(len(st.session_state.events), 5)) # 最大5列で折り返し
     for i, event in enumerate(st.session_state.events):
-        d = (datetime.strptime(event['date'], "%Y-%m-%d") - datetime.now()).days
-        cols[i].metric(event['name'], event['date'], f"あと {d} 日")
+        target_date = datetime.strptime(event['date'], "%Y-%m-%d")
+        days_left = (target_date - datetime.now()).days
+        # カラムを循環させて使用
+        cols[i % 5].metric(event['name'], event['date'], f"あと {days_left} 日")
 
 st.divider()
 st.header("📉 Portfolio Monitor")
