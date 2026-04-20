@@ -68,7 +68,7 @@ def import_from_spreadsheet():
         st.error(f"インポート失敗: {e}")
         return None
 
-# --- 1. セッション状態の初期化 ---
+# --- 1. セッション状態の初期化 (ここがオリジナルの読み込み順序) ---
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = load_json(DB_FILE, {})
 if 'prev_portfolio' not in st.session_state:
@@ -89,7 +89,8 @@ current_api_key = st.session_state.api_key or st.secrets.get("GEMINI_API_KEY", "
 if current_api_key:
     genai.configure(api_key=current_api_key)
 
-# --- 3. 価格取得関数 (Yahoo Finance整合性強化版) ---
+# --- 3. 解析・価格取得関数 ---
+# yfinanceの遅延と取得ミスを防ぐための強化版
 @st.cache_data(ttl=60)
 def get_live_prices(portfolio_keys):
     prices = {}
@@ -100,37 +101,35 @@ def get_live_prices(portfolio_keys):
         
         try:
             stock = yf.Ticker(ticker)
-            # infoからリアルタイム性の高いプロパティを優先取得
+            # infoから最新価格を優先取得し、取れない場合はhistoryを使用
             info = stock.info
-            # 米国株ならcurrentPrice、日本株ならregularMarketPriceを優先
-            current = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('bid') or info.get('ask')
+            current = info.get('currentPrice') or info.get('regularMarketPrice')
             
             if current is None:
                 hist = stock.history(period="1d", interval="1m")
                 if not hist.empty:
                     current = hist['Close'].iloc[-1]
+                else:
+                    hist_5d = stock.history(period="5d")
+                    current = hist_5d['Close'].iloc[-1]
             
-            # 前日終値
             prev_close = info.get('previousClose') or info.get('regularMarketPreviousClose')
             if prev_close is None:
                 hist_5d = stock.history(period="5d")
-                if len(hist_5d) >= 2:
-                    prev_close = hist_5d['Close'].iloc[-2]
+                prev_close = hist_5d['Close'].iloc[-2] if len(hist_5d) >= 2 else current
 
-            if current:
-                prices[key] = {"current": current, "prev_close": prev_close}
-            else:
-                prices[key] = None
+            prices[key] = {"current": current, "prev_close": prev_close}
         except:
             prices[key] = None
             
     try:
-        usdjpy_t = yf.Ticker("JPY=X")
-        prices["USDJPY"] = usdjpy_t.info.get('regularMarketPrice') or usdjpy_t.history(period="1d")['Close'].iloc[-1]
+        usdjpy_ticker = yf.Ticker("JPY=X")
+        prices["USDJPY"] = usdjpy_ticker.info.get('regularMarketPrice') or usdjpy_ticker.history(period="1d")['Close'].iloc[-1]
     except:
         prices["USDJPY"] = 159.2
     return prices
 
+# 【オリジナルプロンプト踏襲】
 def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。サイドバーで設定してください。")
@@ -166,7 +165,7 @@ def analyze_multiple_images(uploaded_files):
     else:
         raise ValueError("AI解析に失敗しました。")
 
-# --- 4. UI ---
+# --- 4. UI (オリジナルCSS/構成踏襲) ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
 st.markdown("""
@@ -205,24 +204,32 @@ with st.sidebar:
         new_shares, new_cost = 0.0, 0.0
 
     btn_col1, btn_col2, btn_col3 = st.columns(3)
+    mod_ready = btn_col1.button("修正")
+    rev_ready = btn_col2.button("復元", type="primary")
+    del_ready = btn_col3.button("削除")
+
     if selected_no:
-        if btn_col1.button("修正"):
+        if mod_ready:
             backup_portfolio()
-            st.session_state.portfolio[target_key].update({'shares': new_shares, 'cost': new_cost})
+            st.session_state.portfolio[target_key]['shares'] = new_shares
+            st.session_state.portfolio[target_key]['cost'] = new_cost
             save_json(DB_FILE, st.session_state.portfolio)
             st.rerun()
-        if btn_col2.button("復元", type="primary"):
+
+        if rev_ready:
             if st.session_state.prev_portfolio is not None:
                 st.session_state.portfolio = copy.deepcopy(st.session_state.prev_portfolio)
                 save_json(DB_FILE, st.session_state.portfolio)
                 st.rerun()
-        if btn_col3.button("削除"):
+
+        if del_ready:
             backup_portfolio()
             del st.session_state.portfolio[target_key]
             save_json(DB_FILE, st.session_state.portfolio)
             st.rerun()
 
     st.divider()
+    
     st.header("📌 Event Manager")
     with st.expander("イベントの追加/削除"):
         ev_name = st.text_input("イベント名")
@@ -232,7 +239,7 @@ with st.sidebar:
             save_json(EVENT_FILE, st.session_state.events)
             st.rerun()
         if st.session_state.events:
-            idx = st.selectbox("削除", range(len(st.session_state.events)), format_func=lambda x: st.session_state.events[x]['name'])
+            idx = st.selectbox("削除するイベント", range(len(st.session_state.events)), format_func=lambda x: st.session_state.events[x]['name'])
             if st.button("選択したイベントを削除"):
                 st.session_state.events.pop(idx)
                 save_json(EVENT_FILE, st.session_state.events)
@@ -240,7 +247,7 @@ with st.sidebar:
 
     st.divider()
     st.header("📋 Reminder Edit")
-    # text_areaでEnterキー改行を許可
+    # ここでEnterキー改行可能
     new_reminder = st.text_area("リマインダー内容", value=st.session_state.reminder_text, height=150)
     if st.button("リマインダー更新"):
         st.session_state.reminder_text = new_reminder
@@ -248,18 +255,18 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.subheader("💾 Backup")
+    st.subheader("💾 Backup (Spreadsheet)")
     if st.button("設定をエクスポート"):
         full_config = {"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text}
         export_to_spreadsheet(full_config)
 
     if st.button("設定をインポート"):
-        imported = import_from_spreadsheet()
-        if imported:
+        imported_data = import_from_spreadsheet()
+        if imported_data:
             backup_portfolio()
-            st.session_state.portfolio = imported.get("portfolio", {})
-            st.session_state.events = imported.get("events", [])
-            st.session_state.reminder_text = imported.get("reminder_text", "")
+            st.session_state.portfolio = imported_data.get("portfolio", {})
+            st.session_state.events = imported_data.get("events", [])
+            st.session_state.reminder_text = imported_data.get("reminder_text", "")
             save_json(DB_FILE, st.session_state.portfolio)
             save_json(EVENT_FILE, st.session_state.events)
             save_json(REMINDER_FILE, st.session_state.reminder_text)
@@ -267,16 +274,18 @@ with st.sidebar:
 
     st.divider()
     st.header("📸 AI Scanner")
-    up_files = st.file_uploader("スクショアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+    up_files = st.file_uploader("証券口座のスクショ", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
     if up_files and st.button("AI解析実行"):
         with st.spinner("解析中..."):
             try:
-                st.session_state.portfolio = analyze_multiple_images(up_files)
+                extracted = analyze_multiple_images(up_files)
+                backup_portfolio()
+                st.session_state.portfolio = extracted
                 save_json(DB_FILE, st.session_state.portfolio)
                 st.rerun()
             except Exception as e: st.error(f"エラー: {e}")
 
-# --- 5. メイン画面 ---
+# --- 5. メメイン画面 (オリジナルロジック踏襲) ---
 st.title("🚀 Strategist Dashboard")
 
 if st.session_state.events:
@@ -292,11 +301,12 @@ if st.session_state.events:
 
 st.divider()
 st.header("📉 Portfolio Monitor")
-if st.button('最新価格に更新'): 
-    st.cache_data.clear() # キャッシュをクリア
+if st.button('最新価格に更新'):
+    st.cache_data.clear() # キャッシュを完全にクリアして再取得
     st.rerun()
 
-prices_dict = get_live_prices(tuple(st.session_state.portfolio.keys()))
+# キーの順序が変わらないようリストに変換
+prices_dict = get_live_prices(list(st.session_state.portfolio.keys()))
 rate = prices_dict.get("USDJPY", 159.2)
 
 rows = []
@@ -305,7 +315,7 @@ total_profit_usd_only_us_stocks = 0
 
 for i, (key, info) in enumerate(st.session_state.portfolio.items()):
     p_data = prices_dict.get(key)
-    if p_data:
+    if p_data and info.get('shares', 0) >= 0:
         cur, prev = p_data["current"], p_data["prev_close"]
         day_change_pct = f"({(cur - prev) / prev * 100:+.2f}%)" if prev else ""
         display_name = f"{key.split('_')[0]} {info.get('name','')}"
@@ -343,4 +353,5 @@ else: st.info("銘柄がありません")
 
 st.divider()
 st.subheader("📋 Reminder")
+st.info(st.session_state.reminder_text)
 st.info(st.session_state.reminder_text)
