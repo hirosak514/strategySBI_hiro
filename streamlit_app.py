@@ -87,7 +87,7 @@ current_api_key = st.session_state.api_key or st.secrets.get("GEMINI_API_KEY", "
 if current_api_key:
     genai.configure(api_key=current_api_key)
 
-# --- 3. 価格取得関数 (Yahoo禁止・前日比取得ロジック強化) ---
+# --- 3. 価格取得関数 (日本株:株探 / 米国株:GoogleFinance) ---
 @st.cache_data(ttl=60)
 def get_live_prices(portfolio_keys):
     prices = {}
@@ -121,22 +121,15 @@ def get_live_prices(portfolio_keys):
                 url = f"https://www.google.com/finance/quote/{ticker}"
                 res = requests.get(url, headers=headers, timeout=5)
                 soup = BeautifulSoup(res.text, 'html.parser')
-                
                 price_div = soup.find("div", {"class": "YMlKec fxKbKc"})
                 if price_div:
                     current = float(price_div.text.replace('$', '').replace(',', ''))
                 
-                # 前日比取得ロジックの強化（Previous close ラベルから検索）
                 prev_div = soup.find("div", string="Previous close")
                 if prev_div:
                     val_div = prev_div.find_next_sibling("div")
                     if val_div:
                         prev_close = float(val_div.text.replace('$', '').replace(',', ''))
-                if not prev_close:
-                    # 予備の取得パターン
-                    prev_label = soup.find(text="Previous close")
-                    if prev_label:
-                        prev_close = float(prev_label.parent.parent.find_all("div")[-1].text.replace('$', '').replace(',', ''))
             except: pass
 
         prices[key] = {
@@ -154,18 +147,51 @@ def get_live_prices(portfolio_keys):
         prices["USDJPY"] = 159.2
     return prices
 
+# 【ご提示いただいた画像解析ロジックを完全踏襲】
 def analyze_multiple_images(uploaded_files):
-    if not uploaded_files: return None
-    if not current_api_key: raise ValueError("APIキー不足")
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    prompt = """保有銘柄を抽出しJSONで回答。{"銘柄コード_区分": {"name": "銘柄名", "shares": 数量, "cost": 取得単価, "currency": "通貨"}}"""
-    images = [Image.open(f) for f in uploaded_files]
+    if not current_api_key:
+        raise ValueError("APIキーが設定されていません。サイドバーで設定してください。")
+    
+    # モデル選択の安定化 (NotFoundエラー対策)
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+    except:
+        available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
+        target_model = next((m for m in available_models if "flash" in m), available_models[0])
+        model = genai.GenerativeModel(target_model)
+
+    prompt = """
+    証券口座のスクリーンショット（複数可）から、保有銘柄の情報を抽出して、以下のJSON形式のみで回答してください。
+    余計な説明や装飾（```json など）は一切不要です。
+
+    【抽出ルール】
+    1. キーは「銘柄コード_区分」としてください。
+        - 現物株の場合：コードのみ（例：8136_現物, NVDA_現物）
+        - 信用買い（制度・無期限）の場合：末尾に _MARGIN_LONG（例：8136_MARGIN_LONG）
+        - 信用売りの場合：末尾に _SHORT（例：8136_SHORT）
+    2. 銘柄コードが不明な場合は、銘柄名をアルファベット表記にして代用してください。
+    3. 数値（数量、取得単価）からカンマや円、ドル記号を除去して数値のみにしてください。
+    4. 通貨は、日本株なら "JPY"、米国株なら "USD" としてください。
+
+    【出力フォーマット】
+    {
+      "銘柄コード_区分": {"name": "銘柄名", "shares": 数量, "cost": 取得単価, "currency": "通貨"},
+      ...
+    }
+    """
+    
+    images = []
+    for uploaded_file in uploaded_files:
+        images.append(Image.open(uploaded_file))
+    
     response = model.generate_content([prompt] + images)
     json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-    if json_match: return json.loads(json_match.group())
-    raise ValueError("解析失敗")
+    if json_match:
+        return json.loads(json_match.group())
+    else:
+        raise ValueError("AI解析に失敗しました。画像の形式や内容を確認してください。")
 
-# --- 4. UI設定 ---
+# --- 4. UI ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
 
 st.markdown("""
@@ -186,10 +212,11 @@ with st.sidebar:
     if st.button("APIキーを保存"):
         st.session_state.api_key = new_api_key
         save_json(CONFIG_FILE, {"gemini_key": new_api_key})
-        st.success("保存完了")
+        st.success("APIキーを保存しました")
         st.rerun()
 
     st.divider()
+
     st.header("✏️ 銘柄情報の直接入力")
     portfolio_items = list(st.session_state.portfolio.keys())
     if portfolio_items:
@@ -217,11 +244,12 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
+    
     st.header("📌 Event Manager")
     with st.expander("追加/削除"):
         ev_name = st.text_input("イベント名")
         ev_date = st.date_input("日付")
-        if st.button("追加"):
+        if st.button("イベント追加"):
             st.session_state.events.append({"name": ev_name, "date": ev_date.strftime("%Y-%m-%d")})
             save_json(EVENT_FILE, st.session_state.events)
             st.rerun()
@@ -234,17 +262,18 @@ with st.sidebar:
 
     st.divider()
     st.header("📋 Reminder Edit")
-    new_rem = st.text_area("内容", value=st.session_state.reminder_text, height=150)
+    new_reminder = st.text_area("リマインダー内容", value=st.session_state.reminder_text, height=150)
     if st.button("リマインダー更新"):
-        st.session_state.reminder_text = new_rem
-        save_json(REMINDER_FILE, new_rem)
+        st.session_state.reminder_text = new_reminder
+        save_json(REMINDER_FILE, new_reminder)
         st.rerun()
 
     st.divider()
-    st.subheader("💾 Backup")
-    if st.button("エクスポート"):
-        export_to_spreadsheet({"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text})
-    if st.button("インポート"):
+    st.subheader("💾 Backup (Spreadsheet)")
+    full_config = {"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text}
+    if st.button("設定をエクスポート"):
+        export_to_spreadsheet(full_config)
+    if st.button("設定をインポート"):
         data = import_from_spreadsheet()
         if data:
             st.session_state.portfolio = data.get("portfolio", {})
@@ -255,13 +284,18 @@ with st.sidebar:
 
     st.divider()
     st.header("📸 AI Scanner")
-    up = st.file_uploader("アップロード", type=["png", "jpg"], accept_multiple_files=True)
-    # 解析ボタンを常に表示
-    if st.button("解析"):
-        if up:
-            st.session_state.portfolio = analyze_multiple_images(up)
-            save_json(DB_FILE, st.session_state.portfolio)
-            st.rerun()
+    up_files = st.file_uploader("証券口座のスクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+    # ボタンを常に表示
+    if st.button("AI解析実行"):
+        if up_files:
+            with st.spinner("AIが銘柄を抽出中..."):
+                try:
+                    extracted_data = analyze_multiple_images(up_files)
+                    backup_portfolio()
+                    st.session_state.portfolio = extracted_data
+                    save_json(DB_FILE, st.session_state.portfolio)
+                    st.rerun()
+                except Exception as e: st.error(f"エラー: {e}")
         else:
             st.warning("画像を選択してください")
 
@@ -270,11 +304,11 @@ st.title("🚀 Strategist Dashboard")
 
 if st.session_state.events:
     st.write("📌 **重要スケジュール**")
-    event_container = st.container()
-    cols = event_container.columns(5)
+    cols = st.columns(5)
     for i, event in enumerate(st.session_state.events):
-        d = (datetime.strptime(event['date'], "%Y-%m-%d") - datetime.now()).days
-        cols[i % 5].metric(event['name'], event['date'], f"あと {d} 日")
+        target_date = datetime.strptime(event['date'], "%Y-%m-%d")
+        days_left = (target_date - datetime.now()).days
+        cols[i % 5].metric(event['name'], event['date'], f"あと {days_left} 日")
 
 st.divider()
 st.header("📉 Portfolio Monitor")
@@ -287,7 +321,7 @@ rate = prices_dict.get("USDJPY", 159.2)
 
 rows = []
 total_profit_jpy = 0
-total_profit_usd = 0
+total_profit_usd_only_us_stocks = 0
 
 for i, (key, info) in enumerate(st.session_state.portfolio.items()):
     p_data = prices_dict.get(key)
@@ -308,7 +342,7 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
                 if info.get('currency') == "USD":
                     p_usd = (cur - info['cost']) * info['shares']
                     p_jpy = p_usd * rate
-                    total_profit_usd += p_usd
+                    total_profit_usd_only_us_stocks += p_usd
                 else: p_jpy = (cur - info['cost']) * info['shares']
 
         total_profit_jpy += p_jpy
@@ -322,11 +356,10 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
 
 m1, m2 = st.columns(2)
 m1.metric("総合計損益 (JPY)", f"¥{total_profit_jpy:,.0f}", delta=f"USD/JPY: {rate:.2f}")
-m2.metric("米国株合計損益 (USD)", f"${total_profit_usd:,.2f}")
+m2.metric("米国株合計損益 (USD)", f"${total_profit_usd_only_us_stocks:,.2f}")
 
-if rows:
-    st.table(pd.DataFrame(rows))
-else: st.info("データなし")
+if rows: st.table(pd.DataFrame(rows))
+else: st.info("銘柄がありません")
 
 st.divider()
 st.subheader("📋 Reminder")
