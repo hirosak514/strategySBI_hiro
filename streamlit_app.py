@@ -118,15 +118,17 @@ def get_live_prices(portfolio_keys):
         prices["USDJPY"] = 159.2
     return prices
 
-# 【書き換え箇所：NotFoundエラー対策と画像解析ロジック】
+# 【画像解析部分：NotFound回避とロジック踏襲】
 def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。サイドバーで設定してください。")
     
-    # 利用可能なモデルを確認し、適切なモデルを選択（NotFound回避）
+    # 利用可能なモデルを動的に取得しNotFoundエラーを回避
     try:
+        # まず標準的な指定を試行
         model = genai.GenerativeModel("gemini-1.5-flash")
     except:
+        # 失敗した場合は利用可能なモデルリストからflashを探す
         available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
         target_model = next((m for m in available_models if "flash" in m), available_models[0])
         model = genai.GenerativeModel(target_model)
@@ -280,7 +282,7 @@ with st.sidebar:
     st.divider()
     st.header("📸 AI Scanner")
     up_files = st.file_uploader("証券口座のスクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
-    # 【書き換え：ボタンを常に表示】
+    # 解析ボタンを常に表示
     if st.button("AI解析実行"):
         if up_files:
             with st.spinner("AIが銘柄を抽出中..."):
@@ -304,7 +306,7 @@ if st.session_state.events:
         try:
             target_date = datetime.strptime(event['date'], "%Y-%m-%d")
             days_left = (target_date - datetime.now()).days
-            cols[i].markdown(f<small>{event['name']}</small>", unsafe_allow_html=True)
+            cols[i].markdown(f"<small>{event['name']}</small>", unsafe_allow_html=True)
             cols[i].metric("", event['date'], f"あと {days_left} 日")
         except: pass
 
@@ -360,4 +362,3 @@ else: st.info("銘柄がありません")
 st.divider()
 st.subheader("📋 Reminder")
 st.info(st.session_state.reminder_text)
-
