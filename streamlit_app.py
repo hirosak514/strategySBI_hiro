@@ -118,14 +118,18 @@ def get_live_prices(portfolio_keys):
         prices["USDJPY"] = 159.2
     return prices
 
-# 【オリジナルを完全踏襲】
+# 【書き換え箇所：NotFoundエラー対策と画像解析ロジック】
 def analyze_multiple_images(uploaded_files):
     if not current_api_key:
         raise ValueError("APIキーが設定されていません。サイドバーで設定してください。")
     
-    available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-    target_model = next((m for m in available_models if "flash" in m), available_models[0])
-    model = genai.GenerativeModel(target_model)
+    # 利用可能なモデルを確認し、適切なモデルを選択（NotFound回避）
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+    except:
+        available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
+        target_model = next((m for m in available_models if "flash" in m), available_models[0])
+        model = genai.GenerativeModel(target_model)
 
     prompt = """
     証券口座のスクリーンショット（複数可）から、保有銘柄の情報を抽出して、以下のJSON形式のみで回答してください。
@@ -257,7 +261,6 @@ with st.sidebar:
     st.subheader("💾 Backup (Spreadsheet)")
     full_config = {"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text}
     
-    # 【改修箇所】固定URLを使用するように変更
     if st.button("設定をエクスポート"):
         export_to_spreadsheet(full_config)
 
@@ -277,15 +280,19 @@ with st.sidebar:
     st.divider()
     st.header("📸 AI Scanner")
     up_files = st.file_uploader("証券口座のスクショをアップロード", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
-    if up_files and st.button("AI解析実行"):
-        with st.spinner("AIが銘柄を抽出中..."):
-            try:
-                extracted_data = analyze_multiple_images(up_files)
-                backup_portfolio()
-                st.session_state.portfolio = extracted_data
-                save_json(DB_FILE, st.session_state.portfolio)
-                st.rerun()
-            except Exception as e: st.error(f"エラー: {e}")
+    # 【書き換え：ボタンを常に表示】
+    if st.button("AI解析実行"):
+        if up_files:
+            with st.spinner("AIが銘柄を抽出中..."):
+                try:
+                    extracted_data = analyze_multiple_images(up_files)
+                    backup_portfolio()
+                    st.session_state.portfolio = extracted_data
+                    save_json(DB_FILE, st.session_state.portfolio)
+                    st.rerun()
+                except Exception as e: st.error(f"エラー: {e}")
+        else:
+            st.warning("画像を選択してください")
 
 # --- 5. メイン画面 ---
 st.title("🚀 Strategist Dashboard")
@@ -297,7 +304,7 @@ if st.session_state.events:
         try:
             target_date = datetime.strptime(event['date'], "%Y-%m-%d")
             days_left = (target_date - datetime.now()).days
-            cols[i].markdown(f"<small>{event['name']}</small>", unsafe_allow_html=True)
+            cols[i].markdown(f<small>{event['name']}</small>", unsafe_allow_html=True)
             cols[i].metric("", event['date'], f"あと {days_left} 日")
         except: pass
 
