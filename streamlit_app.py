@@ -165,7 +165,7 @@ def analyze_multiple_images(uploaded_files):
     response = model.generate_content([prompt] + images)
     json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
     if json_match: return json.loads(json_match.group())
-    raise ValueError("解析失敗")
+    raise ValueError("解析失敗")　
 
 # --- 4. UI設定 ---
 st.set_page_config(page_title="Strategist Dashboard", layout="wide")
