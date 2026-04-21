@@ -88,11 +88,11 @@ current_api_key = st.session_state.api_key or st.secrets.get("GEMINI_API_KEY", "
 if current_api_key:
     genai.configure(api_key=current_api_key)
 
-# --- 3. 価格取得関数 (Yahoo禁止・修正版) ---
+# --- 3. 価格取得関数 (Yahoo禁止・前日比取得ロジック強化) ---
 @st.cache_data(ttl=60)
 def get_live_prices(portfolio_keys):
     prices = {}
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
     for key in portfolio_keys:
         symbol = key.split('_')[0]
@@ -108,7 +108,6 @@ def get_live_prices(portfolio_keys):
                 price_tag = soup.find('span', class_='kabuka')
                 if price_tag:
                     current = float(price_tag.text.replace(',', '').replace('円', ''))
-                # 前日比から逆算
                 change_tag = soup.find('span', class_='zenjitsu_at')
                 if change_tag and current:
                     change_text = change_tag.text.replace(',', '').replace('円', '')
@@ -119,7 +118,6 @@ def get_live_prices(portfolio_keys):
             except: pass
         else:
             try:
-                # 米国株：Google Finance
                 ticker = "7013:TYO" if symbol == "IHI" else f"{symbol}:NASDAQ"
                 url = f"https://www.google.com/finance/quote/{ticker}"
                 res = requests.get(url, headers=headers, timeout=5)
@@ -130,23 +128,24 @@ def get_live_prices(portfolio_keys):
                 if price_div:
                     current = float(price_div.text.replace('$', '').replace(',', ''))
                 
-                # 【重要】前日終値の取得ロジック強化
-                # Google Financeの構造から「Previous close」のラベルを持つ要素を探す
+                # 【前日比修正】複数のセレクタパターンで試行
                 prev_element = soup.find("div", string="Previous close")
                 if prev_element:
-                    # その親要素または兄弟要素から数値を探す
                     parent = prev_element.find_parent()
                     prev_val_text = parent.find_all("div")[-1].text
                     prev_close = float(prev_val_text.replace('$', '').replace(',', ''))
+                else:
+                    # 予備のセレクタ
+                    prev_div = soup.select_one('div[class*="P6u0m"]')
+                    if prev_div:
+                        prev_close = float(prev_div.text.replace('$', '').replace(',', ''))
             except: pass
 
-        # 取得失敗時のセーフティ
         prices[key] = {
-            "current": current if current > 0 else 0.01, # 0除算防止
+            "current": current if current > 0 else 0.01, 
             "prev_close": prev_close if prev_close > 0 else current
         }
             
-    # 為替レート
     try:
         url = "https://www.google.com/finance/quote/USD-JPY"
         res = requests.get(url, headers=headers, timeout=5)
@@ -158,10 +157,9 @@ def get_live_prices(portfolio_keys):
     return prices
 
 def analyze_multiple_images(uploaded_files):
-    if not current_api_key:
-        raise ValueError("APIキーがありません")
+    if not current_api_key: raise ValueError("APIキー不足")
     model = genai.GenerativeModel("gemini-1.5-flash")
-    prompt = """証券口座画像から保有銘柄を抽出しJSONで回答。{"銘柄コード_区分": {"name": "銘柄名", "shares": 数量, "cost": 取得単価, "currency": "通貨"}}"""
+    prompt = """保有銘柄を抽出しJSONで回答。{"銘柄コード_区分": {"name": "銘柄名", "shares": 数量, "cost": 取得単価, "currency": "通貨"}}"""
     images = [Image.open(f) for f in uploaded_files]
     response = model.generate_content([prompt] + images)
     json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
@@ -193,14 +191,14 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.header("✏️ 銘柄情報の編集")
+    st.header("✏️ 銘柄情報の直接入力")
     portfolio_items = list(st.session_state.portfolio.keys())
     if portfolio_items:
-        selected_no = st.selectbox("銘柄No.", options=[i + 1 for i in range(len(portfolio_items))])
+        selected_no = st.selectbox("銘柄No.を選択", options=[i + 1 for i in range(len(portfolio_items))])
         target_key = portfolio_items[selected_no - 1]
         target_info = st.session_state.portfolio[target_key]
-        new_shares = st.number_input(f"数量", value=float(target_info.get('shares', 0)))
-        new_cost = st.number_input(f"取得単価", value=float(target_info.get('cost', 0)))
+        new_shares = st.number_input(f"数量 ({target_key})", value=float(target_info.get('shares', 0)))
+        new_cost = st.number_input(f"取得単価 ({target_key})", value=float(target_info.get('cost', 0)))
         
         c1, c2, c3 = st.columns(3)
         if c1.button("修正"):
@@ -234,6 +232,27 @@ with st.sidebar:
                 st.session_state.events.pop(idx)
                 save_json(EVENT_FILE, st.session_state.events)
                 st.rerun()
+
+    st.divider()
+    st.header("📋 Reminder Edit")
+    new_rem = st.text_area("内容", value=st.session_state.reminder_text, height=150)
+    if st.button("リマインダー更新"):
+        st.session_state.reminder_text = new_rem
+        save_json(REMINDER_FILE, new_rem)
+        st.rerun()
+
+    st.divider()
+    st.subheader("💾 Backup")
+    if st.button("エクスポート"):
+        export_to_spreadsheet({"portfolio": st.session_state.portfolio, "events": st.session_state.events, "reminder_text": st.session_state.reminder_text})
+    if st.button("インポート"):
+        data = import_from_spreadsheet()
+        if data:
+            st.session_state.portfolio = data.get("portfolio", {})
+            st.session_state.events = data.get("events", [])
+            st.session_state.reminder_text = data.get("reminder_text", "")
+            save_json(DB_FILE, st.session_state.portfolio)
+            st.rerun()
 
     st.divider()
     st.header("📸 AI Scanner")
@@ -271,9 +290,7 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
     p_data = prices_dict.get(key)
     if p_data:
         cur, prev = p_data["current"], p_data["prev_close"]
-        # 前日比計算
-        diff = cur - prev
-        chg_pct = (diff / prev * 100) if prev > 0 else 0
+        chg_pct = ((cur - prev) / prev * 100) if prev > 0 else 0
         chg_pct_disp = f"({chg_pct:+.2f}%)"
         
         if info['shares'] == 0:
@@ -311,3 +328,4 @@ else: st.info("データなし")
 st.divider()
 st.subheader("📋 Reminder")
 st.info(st.session_state.reminder_text)
+
