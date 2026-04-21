@@ -280,7 +280,6 @@ with st.sidebar:
     st.divider()
     st.header("📸 AI Scanner")
     up_files = st.file_uploader("証券口座のスクショ", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
-    # 【改修点1】解析ボタンを常に表示（if up_files の外に出しました）
     if st.button("AI解析実行"):
         if up_files:
             with st.spinner("AIが銘柄を抽出中..."):
@@ -297,16 +296,27 @@ with st.sidebar:
 # --- 5. メイン画面 ---
 st.title("🚀 Strategist Dashboard")
 
+# 【改修点】重要スケジュールの複数行表示
 if st.session_state.events:
     st.write("📌 **重要スケジュール**")
-    cols = st.columns(len(st.session_state.events))
-    for i, event in enumerate(st.session_state.events):
-        try:
-            target_date = datetime.strptime(event['date'], "%Y-%m-%d")
-            days_left = (target_date - datetime.now()).days
-            cols[i].markdown(f"<small>{event['name']}</small>", unsafe_allow_html=True)
-            cols[i].metric("", event['date'], f"あと {days_left} 日")
-        except: pass
+    
+    # 1行あたりの表示件数を設定（ここでは3件）
+    cols_per_row = 3
+    events = st.session_state.events
+    
+    # イベントをチャンクに分ける
+    for i in range(0, len(events), cols_per_row):
+        chunk = events[i : i + cols_per_row]
+        cols = st.columns(cols_per_row) # 空の列も含めて幅を固定する
+        
+        for j, event in enumerate(chunk):
+            try:
+                target_date = datetime.strptime(event['date'], "%Y-%m-%d")
+                days_left = (target_date - datetime.now()).days
+                # 文字切れ対策として名前を太字にし、少し余裕を持たせる
+                cols[j].markdown(f"**{event['name']}**", unsafe_allow_html=True)
+                cols[j].metric("", event['date'], f"あと {days_left} 日")
+            except: pass
 
 st.divider()
 st.header("📉 Portfolio Monitor")
@@ -327,7 +337,6 @@ for i, (key, info) in enumerate(st.session_state.portfolio.items()):
     if p_data and info.get('shares', 0) >= 0:
         cur, prev = p_data["current"], p_data["prev_close"]
         
-        # 【改修点2】前日比表示の修正：prevがNoneまたは0の場合を考慮し、計算式を確実に適用
         if prev and prev != 0:
             diff_pct = (cur - prev) / prev * 100
             day_change_pct = f"({diff_pct:+.2f}%)"
