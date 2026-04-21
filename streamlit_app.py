@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -123,22 +122,21 @@ def get_live_prices(portfolio_keys):
                 res = requests.get(url, headers=headers, timeout=5)
                 soup = BeautifulSoup(res.text, 'html.parser')
                 
-                # 現在値
                 price_div = soup.find("div", {"class": "YMlKec fxKbKc"})
                 if price_div:
                     current = float(price_div.text.replace('$', '').replace(',', ''))
                 
-                # 【前日比修正】複数のセレクタパターンで試行
-                prev_element = soup.find("div", string="Previous close")
-                if prev_element:
-                    parent = prev_element.find_parent()
-                    prev_val_text = parent.find_all("div")[-1].text
-                    prev_close = float(prev_val_text.replace('$', '').replace(',', ''))
-                else:
-                    # 予備のセレクタ
-                    prev_div = soup.select_one('div[class*="P6u0m"]')
-                    if prev_div:
-                        prev_close = float(prev_div.text.replace('$', '').replace(',', ''))
+                # 前日比取得ロジックの強化（Previous close ラベルから検索）
+                prev_div = soup.find("div", string="Previous close")
+                if prev_div:
+                    val_div = prev_div.find_next_sibling("div")
+                    if val_div:
+                        prev_close = float(val_div.text.replace('$', '').replace(',', ''))
+                if not prev_close:
+                    # 予備の取得パターン
+                    prev_label = soup.find(text="Previous close")
+                    if prev_label:
+                        prev_close = float(prev_label.parent.parent.find_all("div")[-1].text.replace('$', '').replace(',', ''))
             except: pass
 
         prices[key] = {
@@ -157,6 +155,7 @@ def get_live_prices(portfolio_keys):
     return prices
 
 def analyze_multiple_images(uploaded_files):
+    if not uploaded_files: return None
     if not current_api_key: raise ValueError("APIキー不足")
     model = genai.GenerativeModel("gemini-1.5-flash")
     prompt = """保有銘柄を抽出しJSONで回答。{"銘柄コード_区分": {"name": "銘柄名", "shares": 数量, "cost": 取得単価, "currency": "通貨"}}"""
@@ -257,10 +256,14 @@ with st.sidebar:
     st.divider()
     st.header("📸 AI Scanner")
     up = st.file_uploader("アップロード", type=["png", "jpg"], accept_multiple_files=True)
-    if up and st.button("解析"):
-        st.session_state.portfolio = analyze_multiple_images(up)
-        save_json(DB_FILE, st.session_state.portfolio)
-        st.rerun()
+    # 解析ボタンを常に表示
+    if st.button("解析"):
+        if up:
+            st.session_state.portfolio = analyze_multiple_images(up)
+            save_json(DB_FILE, st.session_state.portfolio)
+            st.rerun()
+        else:
+            st.warning("画像を選択してください")
 
 # --- 5. メイン画面 ---
 st.title("🚀 Strategist Dashboard")
